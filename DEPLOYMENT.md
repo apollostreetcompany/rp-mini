@@ -1,43 +1,84 @@
 # DEPLOYMENT.md - rp-mini
 
-## Runtime
-- Node.js >= 22.
-- Package manager: pnpm 10.16.1.
-- Module format: ESM.
-- Search runtime: `file_search` resolves ripgrep via `Config.search.ripgrep_path` / `RP_MINI_RIPGREP_PATH`, then optional `@vscode/ripgrep`, then PATH `rg`.
-- CodeMap parser runtime: `@vscode/tree-sitter-wasm` for VS Code-shipped grammars; `tree-sitter-wasms@0.1.13` supplies prebuilt Swift, C, and Dart WASM grammars for Bead 9.
+## Build And Test
 
-## Local Commands
 - Install: `pnpm install`
+- Generate shared plugin prompts: `pnpm build:prompts`
 - Build: `pnpm build`
-- Build generated plugin prompts: `pnpm build:prompts`
 - Format check: `pnpm format:check`
 - Test: `pnpm test`
-- CLI index smoke: `node packages/server/dist/cli.js index .`
+- Benchmark: `node scripts/bench.mjs [corpusPath]`
 
-## MCP Server
-- Bin name: `rp-mini`
-- Stdio command after build/package linking: `rp-mini serve --root <path>`
-- Default root when no `--root` is passed: current working directory.
-- Claude Code plugin config: `packages/cc-plugin/.mcp.json` starts `node ${CLAUDE_PLUGIN_ROOT}/../server/dist/cli.js serve`; if plugin-root relative resolution is unavailable, use the documented `npx rp-mini serve` fallback after packaging.
-- `file_search`, `read_file`, `get_file_tree`, `get_code_structure`, `manage_selection`, `workspace_context`, `prompt`, `apply_edits`, `file_actions`, and `git` are real handlers as of Bead 8.
-- `rp-mini index [path]` writes `.rp-mini/catalog.json`.
+CI should run prompt generation, build, format, and tests before merge. Main must stay deployable.
 
-## Claude Code Plugin
-- Plugin root: `packages/cc-plugin`.
-- Install from checkout after build: `claude plugin install ./packages/cc-plugin`.
-- Generated agent: `packages/cc-plugin/agents/context-builder.md`, rendered from `shared-prompts/discovery/contract.md` via `pnpm build:prompts`.
-- Optional warm hook: `hooks/hooks.json` runs `rp-mini index .` in the background on `SessionStart`; warming is never required for correctness and no tool call waits on it.
+## Run Standalone
 
-## Codex Plugin
-- Plugin root: `packages/codex-plugin`.
-- Install from checkout after build and prompt generation: `bash packages/codex-plugin/install.sh`.
-- Skills install under `~/.codex/skills/rp-mini-*`; source skill directories remain unprefixed under `packages/codex-plugin/skills/`.
-- Generated context-builder skill: `packages/codex-plugin/skills/context-builder/SKILL.md`, rendered from `shared-prompts/discovery/contract.md` via `pnpm build:prompts`.
-- MCP config snippet: `packages/codex-plugin/config/mcp-servers.toml` uses Codex's `[mcp_servers.rp-mini]` shape with `command = "node"` and `args = ["<abs packages/server/dist/cli.js>", "serve"]`.
-- Installer does not edit `~/.codex/config.toml` by default; `--write-config` appends only when `[mcp_servers.rp-mini]` is absent. `--uninstall` removes only `~/.codex/skills/rp-mini-*`.
+After `pnpm build`, run the stdio MCP server directly:
 
-## Deployment Status
-- No hosted deployment target yet.
-- No ports are bound by the Bead 1 stdio server path.
-- Rollback before first release: revert the Bead 1 scaffold commit after supervisor review.
+```sh
+node packages/server/dist/cli.js serve --root /path/to/workspace
+```
+
+When packaged, the bin name is `rp-mini`, so the equivalent command is:
+
+```sh
+npx rp-mini serve --root /path/to/workspace
+```
+
+The server uses stdio and binds no TCP port. No port-collision check is needed unless a future transport is added.
+
+## Warm Cache
+
+Warm catalog and codemap caches:
+
+```sh
+node packages/server/dist/cli.js index /path/to/workspace
+```
+
+The warm command writes `.rp-mini/catalog.json` and `.rp-mini/codemap-cache/*.json`. Warming is optional; normal tool calls verify files on read and build missing cache entries lazily.
+
+## Runtime Storage
+
+Runtime files are stored under each workspace root:
+
+| Path | Purpose |
+| --- | --- |
+| `.rp-mini/catalog.json` | CLI warm snapshot for inspection. |
+| `.rp-mini/codemap-cache/` | Shared atomic JSON codemap cache. |
+| `.rp-mini/sessions/` | Per-session selection state when persistence is enabled. |
+| `.rp-mini/profiles/` | Named selection profiles. |
+| `.rp-mini/exports/` | Markdown exports and JSON receipts from `workspace_context op=export`. |
+
+The cache is safe for multiple stdio server processes: writes use temp-file plus rename, and readers ignore invalid JSON.
+
+## Plugin Consumption
+
+Claude Code:
+- Plugin root: `packages/cc-plugin`
+- Local install: `claude plugin install ./packages/cc-plugin`
+- MCP config: `packages/cc-plugin/.mcp.json`
+- Generated context-builder agent: `packages/cc-plugin/agents/context-builder.md`
+- Skills: `packages/cc-plugin/skills/rp-*`
+
+Codex:
+- Plugin root: `packages/codex-plugin`
+- Local install: `bash packages/codex-plugin/install.sh`
+- Optional config write: `bash packages/codex-plugin/install.sh --write-config`
+- MCP snippet: `packages/codex-plugin/config/mcp-servers.toml`
+- Generated context-builder skill: `packages/codex-plugin/skills/context-builder/SKILL.md`
+- Skills installed under `~/.codex/skills/rp-mini-*`
+
+Both plugins consume the same server command and shared discovery prompt source.
+
+## Release Checklist Placeholder
+
+1. Bump package versions from `0.0.0`.
+2. Run `pnpm install`, `pnpm build:prompts`, `pnpm build`, `pnpm format:check`, and `pnpm test`.
+3. Run `node scripts/bench.mjs ../repoprompt-ce --date <YYYY-MM-DD>` and update `docs/bench.md`.
+4. Verify Claude plugin install from a clean checkout.
+5. Verify Codex plugin install and `--write-config` idempotence in a temporary HOME.
+6. Verify `node packages/server/dist/cli.js serve --root <fixture>` with a real MCP client.
+7. Confirm `THIRD_PARTY_NOTICES.md` and Apache-2.0 attribution are current.
+8. Tag release and publish packages/artifacts after review.
+
+Rollback before first public release: revert the bead branch or remove installed plugin files with the Codex uninstall path and Claude plugin manager.
