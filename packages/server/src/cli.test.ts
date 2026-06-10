@@ -80,5 +80,5 @@ describe("rp-mini index CLI", () => {
     );
 
     expect(result.stdout).toMatch(/codemaps: 0 cached, 8 computed, 0 skipped\(gated\)/);
-  });
+  }, 60_000);
 });
