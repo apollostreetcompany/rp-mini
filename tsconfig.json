@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/core" },
     { "path": "packages/server" },
-    { "path": "packages/cc-plugin" }
+    { "path": "packages/cc-plugin" },
+    { "path": "packages/codex-plugin" }
   ]
 }
