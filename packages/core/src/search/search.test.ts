@@ -1,12 +1,17 @@
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { buildCatalog } from "../catalog/index.js";
 import { defaultConfig, type Config, type DeepPartial } from "../config/index.js";
-import { buildGitRecencyCache, rankSearchResults, searchFiles } from "./index.js";
+import {
+  buildGitRecencyCache,
+  rankSearchResults,
+  resolveRipgrepBinary,
+  searchFiles,
+} from "./index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,6 +30,7 @@ function withConfig(overrides: DeepPartial<Config> = {}): Config {
   const config = structuredClone(defaultConfig);
   if (overrides.caps) Object.assign(config.caps, overrides.caps);
   if (overrides.ignore) Object.assign(config.ignore, overrides.ignore);
+  if (overrides.search) Object.assign(config.search, overrides.search);
   return config;
 }
 
@@ -112,6 +118,114 @@ describe("searchFiles", () => {
 
     expect(result.matches.map((match) => match.path)).toEqual(["src/kept.ts"]);
   });
+
+  it("streams broad ripgrep JSON output beyond the old exec buffer", async () => {
+    const root = await tempRoot("stream-large");
+    const config = withConfig();
+    const line = `import { thing } from "./module"; ${"x".repeat(150)}\n`;
+    const fileCount = 320;
+    const linesPerFile = 80;
+    for (let fileIndex = 0; fileIndex < fileCount; fileIndex += 1) {
+      await write(join(root, `src/file-${fileIndex}.ts`), line.repeat(linesPerFile));
+    }
+    const catalog = await buildCatalog([root], config);
+    const files = catalog.roots[0]!.files.map((file) => file.relativePath);
+    const { stdout } = await execFileAsync(
+      resolveRipgrepBinary(config),
+      ["--json", "--color=never", "--no-heading", "-F", "import", ...files],
+      { cwd: root, maxBuffer: 64 * 1024 * 1024 },
+    );
+    expect(Buffer.byteLength(stdout)).toBeGreaterThan(4 * 1024 * 1024);
+
+    const start = performance.now();
+    const result = await searchFiles(catalog, config, {
+      pattern: "import",
+      mode: "content",
+      max_results: 5,
+    });
+    const elapsedMs = performance.now() - start;
+
+    expect(result.matches).toHaveLength(5);
+    expect(result.limit_hit).toBe(true);
+    expect(result.omitted_total).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThan(5000);
+  });
+
+  it("kills and reaps ripgrep after max_results early termination", async () => {
+    const root = await tempRoot("stream-kill");
+    const fakeRg = join(root, "fake-rg.mjs");
+    await write(
+      fakeRg,
+      `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(".rg-pid", String(process.pid));
+let line = 1;
+const emit = () => {
+  process.stdout.write(JSON.stringify({
+    type: "match",
+    data: {
+      path: { text: "src/target.ts" },
+      line_number: line++,
+      lines: { text: "needle\\n" },
+      submatches: [{ match: { text: "needle" }, start: 0 }]
+    }
+  }) + "\\n");
+};
+for (let index = 0; index < 20; index += 1) emit();
+setInterval(emit, 20);
+`,
+    );
+    await chmod(fakeRg, 0o755);
+    await write(join(root, "src/target.ts"), "needle\n");
+    const config = withConfig({ search: { ripgrep_path: fakeRg } });
+    const catalog = await buildCatalog([root], config);
+
+    const start = performance.now();
+    const result = await searchFiles(catalog, config, {
+      pattern: "needle",
+      mode: "content",
+      max_results: 3,
+    });
+    const elapsedMs = performance.now() - start;
+
+    const pid = Number(await readFile(join(root, ".rg-pid"), "utf8"));
+    expect(result.matches).toHaveLength(3);
+    expect(result.limit_hit).toBe(true);
+    expect(elapsedMs).toBeLessThan(1000);
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
+
+  it("stops on the byte guard when output never contains a newline", async () => {
+    const root = await tempRoot("stream-no-newline");
+    const fakeRg = join(root, "fake-rg-stream.mjs");
+    await write(
+      fakeRg,
+      `#!/usr/bin/env node
+import { writeFileSync } from "node:fs";
+writeFileSync(".rg-pid", String(process.pid));
+const block = "x".repeat(1024 * 1024);
+const tick = () => {
+  if (process.stdout.write(block)) setImmediate(tick);
+  else process.stdout.once("drain", tick);
+};
+tick();
+`,
+    );
+    await chmod(fakeRg, 0o755);
+    await write(join(root, "src/target.ts"), "needle\n");
+    const config = withConfig({ search: { ripgrep_path: fakeRg } });
+    const catalog = await buildCatalog([root], config);
+
+    const result = await searchFiles(catalog, config, {
+      pattern: "needle",
+      mode: "content",
+      max_results: 3,
+    });
+
+    const pid = Number(await readFile(join(root, ".rg-pid"), "utf8"));
+    expect(result.matches).toHaveLength(0);
+    expect(() => process.kill(pid, 0)).toThrow();
+  }, 20000);
 });
 
 describe("rankSearchResults", () => {
