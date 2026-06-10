@@ -1,0 +1,20 @@
+{
+  "name": "@rp-mini/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "rp-mini": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@rp-mini/core": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  }
+}

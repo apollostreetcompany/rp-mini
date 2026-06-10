@@ -17,14 +17,16 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 4. (2026-06-10) Perf round: token delta-accounting, type→file index, post-ripgrep ranking, content-hashed snapshots, lazy grammars + OOM-safe keep-alive daemon.
 5. (2026-06-10) Receipts aligned with operator-contracts-and-receipts; mvp preset; proconsult consumes rp-export files.
 6. (2026-06-10) iOS: Tier 1.5 (ignore preset, Package.swift deps, metadata annotations) post-MVP; SwiftUI codemap v2 + asset summarizer Tier 2. Orthogonal to Xcode/Figma MCP.
+7. (2026-06-10) Bead 1 implementation uses pnpm workspaces, TypeScript strict ESM, SDK `McpServer.registerTool` with Zod-backed schemas, and SDK validation semantics where invalid tool calls return `isError: true` MCP results instead of throwing client-side.
 
 ## State
 
 ### Done
 - [x] Repo scaffolded with contract files; GitHub remote created
+- [x] Bead 1 implementation complete locally: monorepo scaffold, config loader, token heuristic, MCP server stubs, CLI, CI, Apache-2.0 license, third-party notice. Awaiting supervisor review/commit.
 
 ### Now
-- Bead 1: monorepo scaffold + config loader + MCP server skeleton (10 stub tools, schema-validated) + CI
+- Supervisor review of Bead 1 working tree; no commit/push performed by implementation agent per prompt.
 
 ### Next
 - Bead 2: catalog (walk/ignore/caps/lazy grammars) + `rp-mini index` warm command
@@ -38,3 +40,7 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - docs/plans/rp-mini-design-2026-06-10.md — canonical design
 - ../repoprompt-ce — reference source (golden fixtures at Tests/RepoPromptTests/CodeMap/Goldens/)
 - handoff/beads.jsonl — bead evidence
+- package.json / pnpm-workspace.yaml / tsconfig*.json — Bead 1 monorepo and build/test entrypoints
+- packages/core/src/config/index.ts — layered config defaults and loader
+- packages/core/src/tokens/index.ts — heuristic token estimator
+- packages/server/src/index.ts / packages/server/src/cli.ts — MCP stub server and `rp-mini` CLI
