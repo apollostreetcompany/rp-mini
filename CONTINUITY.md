@@ -32,13 +32,13 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - [x] Bead 2 implementation complete locally for supervisor review: catalog walk/ignore stack/iOS preset, size/binary/generated flags, verifyFresh, cache substrate, and `rp-mini index` snapshot. Validation: `pnpm build && pnpm format:check && pnpm test` passed (22 tests); `node packages/server/dist/cli.js index .` wrote `.rp-mini/catalog.json` with 40 files, 14 dirs, 9 ignored; no commit/push by implementation agent.
 - [x] Bead 3 implementation complete locally for supervisor review: real `file_search`, `read_file`, and `get_file_tree` handlers wired through MCP linked transport; core search/read/tree modules added with TDD coverage. Validation: `pnpm build && pnpm format:check && pnpm test` passed (33 tests). Acceptance smoke over linked transport passed: `file_search {"pattern":"estimateTokens"}` returned `limit_hit=false`, `read_file start_line=-5` returned 5 lines, and `get_file_tree mode=auto` estimated 530 tokens. No commit/push by implementation engineer.
 - [x] Bead 4 implementation complete locally for supervisor review: CodeMaps v1 for TS/TSX/JS/Python/Go/Rust via lazy WASM parser, FileAPI serializer, sha cache, type index, search symbol boost, `get_code_structure`, tree `+` markers, and `rp-mini index` codemap warm stats. Validation: `pnpm build && pnpm format:check && pnpm test` passed (48 tests). Acceptance: cold index computed 28 codemaps then second index cached 28; linked transport `get_code_structure packages/core/src/catalog/index.ts` listed `getCatalog`, `buildCatalog`, and `verifyFresh` with line numbers. No commit/push by implementation engineer.
+- [x] Bead 5 implementation complete locally for supervisor review: selection state machine, slice normalization/subtraction, per-session persistence, profiles, auto-codemap dependencies, token delta accounting, prompt storage, `manage_selection`, `workspace_context`, selected tree, and selected code structure. Validation: `pnpm build && pnpm format:check && pnpm test` passed (56 tests). Acceptance covered over linked transport: full selection summary with token totals, auto codemap for referenced type definitions, stable workspace snapshot hash, export path with injected clock, prompt ops, and stale slice invalidation. No commit/push by implementation engineer.
 
 ### Now
-- Supervisor review of Bead 4 working tree on `codex/feat/bead-4-codemaps`; no commit/push performed by implementation engineer per prompt. `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
+- Supervisor review of Bead 5 working tree on `codex/feat/bead-5-selection`; no commit/push performed by implementation engineer per prompt. `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
 
 ### Next
-- Supervisor review of Bead 4 working tree; `handoff/beads.jsonl` append after review/commit because schema requires `commit_sha`.
-- Bead 5: tokens + selection state machine + profiles
+- Bead 6: packager XML assembly, presets, receipts, and formal export format.
 
 ## Open Questions
 - UNCONFIRMED: final published name ("rp-mini" working title; RepoPrompt trademark courtesy check before any public release)

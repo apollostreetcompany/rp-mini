@@ -10,6 +10,8 @@ export interface FileTreeOptions {
   mode?: FileTreeMode;
   maxDepth?: number;
   path?: string;
+  selectedPaths?: string[];
+  codemapPaths?: string[];
 }
 
 export interface FileTreeResult {
@@ -32,6 +34,7 @@ interface Node {
   children: Map<string, Node>;
   assetCatalog?: boolean;
   codemapAvailable?: boolean;
+  selected?: boolean;
 }
 
 export function generateFileTree(
@@ -41,7 +44,8 @@ export function generateFileTree(
 ): FileTreeResult | FileTreeError {
   const mode = options.mode ?? "auto";
   if (mode === "selected") {
-    return { error: { code: "not_available_until_selection" } };
+    if (!options.selectedPaths) return { error: { code: "not_available_until_selection" } };
+    return renderCatalog(catalog, config, options);
   }
 
   if (mode === "auto") {
@@ -77,6 +81,8 @@ function renderCatalog(
   const rootLines = catalog.roots.flatMap((root) => {
     const basePath = normalize(options.path ?? "");
     const tree = buildRoot(root.root, basename(root.root) || root.root);
+    const selectedPaths = new Set((options.selectedPaths ?? []).map(normalize));
+    const codemapPaths = new Set((options.codemapPaths ?? []).map(normalize));
     for (const dir of root.dirs) {
       if (!insideBase(dir.relativePath, basePath)) continue;
       addPath(
@@ -89,12 +95,20 @@ function renderCatalog(
     if (options.mode !== "folders") {
       for (const file of root.files) {
         if (!insideBase(file.relativePath, basePath)) continue;
+        if (
+          options.mode === "selected" &&
+          !selectedPaths.has(file.relativePath) &&
+          !codemapPaths.has(file.relativePath)
+        ) {
+          continue;
+        }
         addPath(
           tree,
           stripBase(file.relativePath, basePath),
           "file",
           false,
-          canCodemapFile(file, config),
+          canCodemapFile(file, config) || codemapPaths.has(file.relativePath),
+          selectedPaths.has(file.relativePath),
         );
       }
     }
@@ -119,6 +133,7 @@ function addPath(
   kind: "dir" | "file",
   assetCatalog = false,
   codemapAvailable = false,
+  selected = false,
 ): void {
   const parts = normalize(path).split("/").filter(Boolean);
   if (parts.length === 0) return;
@@ -140,6 +155,7 @@ function addPath(
       child.kind = childKind;
       child.assetCatalog ||= assetCatalog;
       child.codemapAvailable ||= codemapAvailable;
+      child.selected ||= selected;
     }
     cursor = child;
   }
@@ -152,7 +168,7 @@ function renderNode(
   depth: number,
   maxDepth: number | undefined,
 ): string[] {
-  const label = `${node.name}${node.assetCatalog ? " (asset catalog)" : ""}${node.codemapAvailable ? " +" : ""}`;
+  const label = `${node.name}${node.assetCatalog ? " (asset catalog)" : ""}${node.selected ? " *" : ""}${node.codemapAvailable ? " +" : ""}`;
   const line = depth === 0 ? label : `${prefix}${isLast ? "└── " : "├── "}${label}`;
   if (maxDepth !== undefined && depth >= maxDepth) return [line];
   const children = [...node.children.values()].sort(

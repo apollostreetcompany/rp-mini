@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -152,6 +152,142 @@ describe("rp-mini MCP server", () => {
 
     expect(JSON.parse(firstText(result))).toEqual({
       error: { code: "not_available_until_selection" },
+    });
+  });
+
+  it("serves manage_selection, prompt, workspace_context, selected tree, and selected structure", async () => {
+    const root = await tempRoot();
+    await write(
+      join(root, "src", "consumer.ts"),
+      "import type { User } from './model';\nexport function show(user: User): string { return user.name; }\n",
+    );
+    await write(join(root, "src", "model.ts"), "export interface User { name: string }\n");
+    await write(join(root, "src", "notes.md"), "# Notes\n");
+    const { client } = await connectedClient({
+      roots: [root],
+      sessionId: "server-selection",
+      now: () => new Date("2026-06-10T00:00:00.000Z"),
+    });
+
+    const set = await client.callTool({
+      name: "manage_selection",
+      arguments: {
+        op: "set",
+        mode: "full",
+        paths: ["src/consumer.ts", "src/notes.md"],
+        view: "summary",
+      },
+    });
+    expect(JSON.parse(firstText(set))).toMatchObject({
+      summary: { files: 3, full: 2, codemaps: 1 },
+    });
+
+    const files = await client.callTool({
+      name: "manage_selection",
+      arguments: { op: "get", view: "files" },
+    });
+    const filesPayload = JSON.parse(firstText(files)) as {
+      files: Array<{ path: string; mode: string; auto?: boolean }>;
+    };
+    expect(filesPayload.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "src/consumer.ts", mode: "full" }),
+        expect.objectContaining({ path: "src/model.ts", mode: "codemap", auto: true }),
+      ]),
+    );
+
+    await client.callTool({ name: "prompt", arguments: { op: "set", text: "handoff text" } });
+    await client.callTool({
+      name: "prompt",
+      arguments: { op: "append", text: "\nmore" },
+    });
+    const prompt = await client.callTool({ name: "prompt", arguments: { op: "get" } });
+    expect(JSON.parse(firstText(prompt))).toMatchObject({ text: "handoff text\nmore" });
+
+    const tree = await client.callTool({
+      name: "get_file_tree",
+      arguments: { mode: "selected" },
+    });
+    expect(firstText(tree)).toContain("consumer.ts * +");
+    expect(firstText(tree)).toContain("model.ts +");
+    expect(firstText(tree)).not.toContain("unselected.ts");
+
+    const structure = await client.callTool({
+      name: "get_code_structure",
+      arguments: { scope: "selected" },
+    });
+    expect(firstText(structure)).toContain("consumer.ts");
+    expect(firstText(structure)).toContain("model.ts");
+
+    const firstSnapshot = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "snapshot" },
+    });
+    const secondSnapshot = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "snapshot" },
+    });
+    const firstPayload = JSON.parse(firstText(firstSnapshot)) as {
+      content_hash: string;
+      sections: Record<string, string>;
+      tokens: { total: number };
+    };
+    const secondPayload = JSON.parse(firstText(secondSnapshot)) as { content_hash: string };
+    expect(firstPayload.content_hash).toBe(secondPayload.content_hash);
+    expect(firstPayload.sections.prompt).toContain("handoff text");
+    expect(firstPayload.tokens.total).toBeGreaterThan(0);
+
+    await client.callTool({
+      name: "manage_selection",
+      arguments: {
+        op: "add",
+        mode: "slices",
+        slices: [{ path: "src/model.ts", ranges: [{ start_line: 1, end_line: 1 }] }],
+      },
+    });
+    const changedSnapshot = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "snapshot", include: ["selection", "tokens"] },
+    });
+    expect(JSON.parse(firstText(changedSnapshot)).content_hash).not.toBe(firstPayload.content_hash);
+
+    const exported = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "export", include: ["prompt", "tokens"] },
+    });
+    const exportPayload = JSON.parse(firstText(exported)) as { path: string };
+    expect(exportPayload.path).toMatch(/\.rp-mini\/exports\/2026-06-10T00-00-00-000Z-/);
+    expect(await readFile(exportPayload.path, "utf8")).toContain("handoff text");
+  });
+
+  it("drops stale slices after selected file content changes", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "a.ts"), "one\ntwo\nthree\n");
+    const { client } = await connectedClient({
+      roots: [root],
+      sessionId: "slice-invalid",
+      config: { selection: { auto_codemaps: false } },
+    });
+
+    await client.callTool({
+      name: "manage_selection",
+      arguments: {
+        op: "set",
+        mode: "slices",
+        slices: [{ path: "src/a.ts", ranges: [{ start_line: 2, end_line: 2 }] }],
+      },
+    });
+    await write(join(root, "src", "a.ts"), "one\nchanged\nthree\n");
+
+    const result = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "snapshot", include: ["selection"] },
+    });
+    const payload = JSON.parse(firstText(result)) as { selection: { entries: unknown[] } };
+    expect(payload.selection.entries[0]).toMatchObject({
+      path: "src/a.ts",
+      mode: "full",
+      slices_invalidated: true,
     });
   });
 

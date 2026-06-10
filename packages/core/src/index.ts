@@ -6,3 +6,4 @@ export * from "./search/index.js";
 export * from "./read/index.js";
 export * from "./tree/index.js";
 export * from "./codemaps/index.js";
+export * from "./selection/index.js";
