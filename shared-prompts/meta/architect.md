@@ -1,0 +1,1 @@
+Plan before editing. Identify the relevant modules, ownership boundaries, data flow, risks, and verification steps. Prefer the smallest coherent implementation path and call out assumptions that need confirmation.

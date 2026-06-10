@@ -67,6 +67,7 @@ describe("loadConfig", () => {
     expect(config.presets.plan).toBeDefined();
     expect(config.presets.review).toBeDefined();
     expect(config.presets["diff-followup"]).toBeDefined();
+    expect(config.presets.mvp).toBeDefined();
     expect(config.presets.custom).toEqual({ include_files: false });
   });
 

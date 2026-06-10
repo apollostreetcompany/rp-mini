@@ -9,6 +9,7 @@
     "./catalog": "./dist/catalog/index.js",
     "./codemaps": "./dist/codemaps/index.js",
     "./config": "./dist/config/index.js",
+    "./packager": "./dist/packager/index.js",
     "./read": "./dist/read/index.js",
     "./search": "./dist/search/index.js",
     "./selection": "./dist/selection/index.js",
