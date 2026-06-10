@@ -8,3 +8,4 @@ export * from "./tree/index.js";
 export * from "./codemaps/index.js";
 export * from "./selection/index.js";
 export * from "./packager/index.js";
+export * from "./edits/index.js";

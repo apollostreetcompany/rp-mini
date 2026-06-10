@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { dirname, extname, join, sep } from "node:path";
 import { createRequire } from "node:module";
 import ParserModule from "@vscode/tree-sitter-wasm";
@@ -192,6 +192,14 @@ export async function warmCodemapCache(
     }),
   );
   return result;
+}
+
+export async function invalidateCodemapCacheEntry(
+  root: string,
+  relativePath: string,
+  config: Config,
+): Promise<void> {
+  await rm(codemapCachePath(root, normalizePath(relativePath), config), { force: true });
 }
 
 export async function buildTypeIndex(catalog: FileCatalog, config: Config): Promise<TypeIndex> {

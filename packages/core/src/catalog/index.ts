@@ -89,6 +89,10 @@ export async function getCatalog(roots: string[], config: Config): Promise<FileC
   return existing;
 }
 
+export function invalidateCatalog(): void {
+  catalogMemo.clear();
+}
+
 export async function buildCatalog(roots: string[], config: Config): Promise<FileCatalog> {
   const catalogRoots = await Promise.all(
     roots.map(async (root) => {
