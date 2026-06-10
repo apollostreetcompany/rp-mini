@@ -14,7 +14,21 @@ const require = createRequire(import.meta.url);
 const CODEMAP_CACHE_VERSION = 1;
 const DEFAULT_FILE_TOKEN_CAP = 2000;
 
-export type SupportedLanguage = "ts" | "tsx" | "js" | "py" | "go" | "rust";
+export type SupportedLanguage =
+  | "ts"
+  | "tsx"
+  | "js"
+  | "py"
+  | "go"
+  | "rust"
+  | "swift"
+  | "java"
+  | "c"
+  | "cpp"
+  | "c_sharp"
+  | "ruby"
+  | "php"
+  | "dart";
 
 export interface FunctionInfo {
   name: string;
@@ -25,6 +39,7 @@ export interface FunctionInfo {
 export interface PropertyInfo {
   name: string;
   typeName?: string;
+  definitionLine?: string;
 }
 
 export interface ClassInfo {
@@ -67,8 +82,17 @@ export interface FileApi {
   enums: EnumInfo[];
   globalVars: VariableInfo[];
   macros: string[];
+  previews?: number;
+  packageInfo?: PackageInfo;
   referencedTypes: string[];
   definedTypeNames: string[];
+}
+
+export interface PackageInfo {
+  name?: string;
+  products: string[];
+  dependencies: string[];
+  targets: string[];
 }
 
 export interface CodeStructureFile {
@@ -117,12 +141,21 @@ const languageMemo = new Map<SupportedLanguage, Promise<LoadedLanguage>>();
 
 export function languageForPath(path: string): SupportedLanguage | undefined {
   const extension = extname(path).toLowerCase();
+  if (path.endsWith("Package.swift")) return "swift";
   if (extension === ".ts") return "ts";
   if (extension === ".tsx") return "tsx";
   if (extension === ".js" || extension === ".mjs" || extension === ".cjs") return "js";
   if (extension === ".py") return "py";
   if (extension === ".go") return "go";
   if (extension === ".rs") return "rust";
+  if (extension === ".swift") return "swift";
+  if (extension === ".java") return "java";
+  if (extension === ".c" || extension === ".h") return "c";
+  if ([".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"].includes(extension)) return "cpp";
+  if (extension === ".cs") return "c_sharp";
+  if (extension === ".rb") return "ruby";
+  if (extension === ".php") return "php";
+  if (extension === ".dart") return "dart";
   return undefined;
 }
 
@@ -241,6 +274,8 @@ export function serializeFileApi(api: FileApi, options: { maxTokens?: number } =
   appendFunctions(lines, "Functions", api.functions, maxTokens);
   appendEnums(lines, api.enums, maxTokens);
   appendVars(lines, api.globalVars, maxTokens);
+  appendPackage(lines, api.packageInfo, maxTokens);
+  if (api.previews && api.previews > 0) lines.push("", `Previews: ${api.previews}`);
   appendSimple(lines, "Exports", api.exports, maxTokens);
   appendSimple(lines, "Macros", api.macros, maxTokens);
   lines.push("---");
@@ -302,6 +337,30 @@ async function extractFileApi(path: string, source: string): Promise<FileApi> {
     case "rust":
       extractRust(root, source, api);
       break;
+    case "swift":
+      extractSwift(root, source, api);
+      break;
+    case "java":
+      extractJava(root, source, api);
+      break;
+    case "c":
+      extractC(root, source, api);
+      break;
+    case "cpp":
+      extractCpp(root, source, api);
+      break;
+    case "c_sharp":
+      extractCSharp(root, source, api);
+      break;
+    case "ruby":
+      extractRuby(root, source, api);
+      break;
+    case "php":
+      extractPhp(root, source, api);
+      break;
+    case "dart":
+      extractDart(root, source, api);
+      break;
   }
   finalizeTypes(api);
   return api;
@@ -315,16 +374,21 @@ async function loadLanguage(language: SupportedLanguage): Promise<LoadedLanguage
       const wasmName =
         language === "ts"
           ? "tree-sitter-typescript.wasm"
-          : language === "rust"
-            ? "tree-sitter-rust.wasm"
-            : language === "py"
-              ? "tree-sitter-python.wasm"
-              : language === "js"
-                ? "tree-sitter-javascript.wasm"
-                : `tree-sitter-${language}.wasm`;
-      const loadedLanguage = await Language.load(
-        require.resolve(`@vscode/tree-sitter-wasm/wasm/${wasmName}`),
-      );
+          : language === "c_sharp"
+            ? "tree-sitter-c-sharp.wasm"
+            : ["swift", "c", "dart"].includes(language)
+              ? `tree-sitter-${language}.wasm`
+              : language === "rust"
+                ? "tree-sitter-rust.wasm"
+                : language === "py"
+                  ? "tree-sitter-python.wasm"
+                  : language === "js"
+                    ? "tree-sitter-javascript.wasm"
+                    : `tree-sitter-${language}.wasm`;
+      const wasmPath = ["swift", "c", "dart"].includes(language)
+        ? require.resolve(`tree-sitter-wasms/out/${wasmName}`)
+        : require.resolve(`@vscode/tree-sitter-wasm/wasm/${wasmName}`);
+      const loadedLanguage = await Language.load(wasmPath);
       const parser = new Parser();
       parser.setLanguage(loadedLanguage);
       return { parser, language: loadedLanguage };
@@ -586,6 +650,479 @@ function extractRust(root: TsNode, source: string, api: FileApi): void {
   }
 }
 
+function extractSwift(root: TsNode, source: string, api: FileApi): void {
+  for (const child of namedChildren(root)) {
+    if (child.type === "import_declaration") api.imports.push(oneLine(child, source));
+    if (child.type === "protocol_declaration") {
+      api.interfaces.push(extractSwiftProtocol(child, source));
+    }
+    if (child.type === "class_declaration") {
+      api.classes.push(extractSwiftClass(child, source));
+    }
+    if (child.type === "enum_declaration") api.enums.push(extractSwiftEnum(child, source));
+    if (child.type === "typealias_declaration") {
+      const name = text(
+        descendants(child).find((node) => node.type === "type_identifier"),
+        source,
+      );
+      if (name) api.aliases.push({ name, definitionLine: signatureLine(child, source) });
+    }
+    if (child.type === "function_declaration") {
+      const name = text(child.childForFieldName("name"), source);
+      if (name) api.functions.push(fnInfo(name, child, source));
+    }
+    if (child.type === "property_declaration") {
+      const prop = swiftProperty(child, source);
+      if (prop)
+        api.globalVars.push({ name: prop.name, definitionLine: prop.definitionLine ?? prop.name });
+    }
+  }
+  api.previews = (source.match(/^\s*#Preview\b/gm) ?? []).length;
+  if (api.filePath.endsWith("Package.swift")) api.packageInfo = extractPackageInfo(source);
+}
+
+function extractSwiftClass(node: TsNode, source: string): ClassInfo {
+  const info: ClassInfo = {
+    name:
+      text(
+        namedChildren(node).find((child) => child.type === "type_identifier"),
+        source,
+      ) || "<anonymous>",
+    methods: [],
+    properties: [],
+  };
+  for (const member of namedChildren(node.childForFieldName("body"))) {
+    if (member.type === "function_declaration") {
+      const name = text(member.childForFieldName("name"), source);
+      if (name) info.methods.push(fnInfo(name, member, source));
+    }
+    if (member.type === "property_declaration") {
+      const prop = swiftProperty(member, source);
+      if (prop) info.properties.push(prop);
+    }
+  }
+  return info;
+}
+
+function extractSwiftProtocol(node: TsNode, source: string): InterfaceInfo {
+  const info: InterfaceInfo = {
+    name:
+      text(
+        namedChildren(node).find((child) => child.type === "type_identifier"),
+        source,
+      ) || "<anonymous>",
+    methods: [],
+    properties: [],
+  };
+  for (const member of namedChildren(node.childForFieldName("body"))) {
+    if (member.type === "protocol_function_declaration") {
+      const name = text(member.childForFieldName("name"), source);
+      if (name) info.methods.push(fnInfo(name, member, source));
+    }
+    if (member.type === "protocol_property_declaration" || member.type === "property_declaration") {
+      const prop = swiftProperty(member, source);
+      if (prop) info.properties.push(prop);
+    }
+  }
+  return info;
+}
+
+function extractSwiftEnum(node: TsNode, source: string): EnumInfo {
+  const name = text(
+    namedChildren(node).find((child) => child.type === "type_identifier"),
+    source,
+  );
+  const ids = descendants(node).filter((child) => child.type === "simple_identifier");
+  return { name, cases: ids.slice(1).map((child) => text(child, source)) };
+}
+
+function swiftProperty(node: TsNode, source: string): PropertyInfo | undefined {
+  const name = text(
+    descendants(node).find((child) => child.type === "simple_identifier"),
+    source,
+  );
+  if (!name) return undefined;
+  const definitionLine = signatureLine(node, source);
+  if (name === "body" && /:\s*some\s+View\b/.test(definitionLine)) {
+    return { name: "View body", definitionLine: "View body" };
+  }
+  const typeName = typeFromAnnotation(node, source);
+  return { name, typeName, definitionLine };
+}
+
+function extractPackageInfo(source: string): PackageInfo {
+  return {
+    name: firstMatch(source, /\bname:\s*"([^"]+)"/),
+    products: callSummaries(source, /\.(library|executable|plugin)\s*\(([^)]*)\)/g),
+    dependencies: callSummaries(source, /\.(package)\s*\(([^)]*)\)/g),
+    targets: callSummaries(source, /\.(target|executableTarget|testTarget|plugin)\s*\(([^)]*)\)/g),
+  };
+}
+
+function extractJava(root: TsNode, source: string, api: FileApi): void {
+  for (const child of namedChildren(root)) {
+    if (child.type === "import_declaration") api.imports.push(oneLine(child, source));
+    if (child.type === "class_declaration") api.classes.push(extractJavaClass(child, source));
+    if (child.type === "interface_declaration")
+      api.interfaces.push(extractJavaInterface(child, source));
+    if (child.type === "enum_declaration") api.enums.push(extractJavaEnum(child, source));
+  }
+}
+
+function extractJavaClass(node: TsNode, source: string): ClassInfo {
+  const info: ClassInfo = {
+    name: text(node.childForFieldName("name"), source),
+    methods: [],
+    properties: [],
+  };
+  for (const member of namedChildren(node.childForFieldName("body"))) {
+    if (["method_declaration", "constructor_declaration"].includes(member.type)) {
+      const name = text(member.childForFieldName("name"), source);
+      if (name) info.methods.push(fnInfo(name, member, source));
+    }
+    if (member.type === "field_declaration") {
+      for (const declarator of descendants(member).filter(
+        (child) => child.type === "variable_declarator",
+      )) {
+        const name = text(
+          declarator.childForFieldName("name") ?? namedChildren(declarator)[0],
+          source,
+        );
+        if (name) info.properties.push({ name, typeName: javaType(member, source) });
+      }
+    }
+  }
+  return info;
+}
+
+function extractJavaInterface(node: TsNode, source: string): InterfaceInfo {
+  const info: InterfaceInfo = {
+    name: text(node.childForFieldName("name"), source),
+    methods: [],
+    properties: [],
+  };
+  for (const method of descendants(node).filter((child) => child.type === "method_declaration")) {
+    const name = text(method.childForFieldName("name"), source);
+    if (name) info.methods.push(fnInfo(name, method, source));
+  }
+  return info;
+}
+
+function extractJavaEnum(node: TsNode, source: string): EnumInfo {
+  const name = text(node.childForFieldName("name"), source);
+  const cases = descendants(node)
+    .filter((child) => child.type === "enum_constant")
+    .map((child) => text(child.childForFieldName("name") ?? namedChildren(child)[0], source));
+  return { name, cases };
+}
+
+function extractC(root: TsNode, source: string, api: FileApi): void {
+  extractCFamily(root, source, api, false);
+}
+
+function extractCpp(root: TsNode, source: string, api: FileApi): void {
+  extractCFamily(root, source, api, true);
+}
+
+function extractCFamily(root: TsNode, source: string, api: FileApi, isCpp: boolean): void {
+  const nodes = descendants(root);
+  api.imports.push(
+    ...nodes.filter((node) => node.type === "preproc_include").map((node) => oneLine(node, source)),
+  );
+  api.macros.push(
+    ...nodes
+      .filter((node) => ["preproc_def", "preproc_function_def"].includes(node.type))
+      .map((node) =>
+        text(
+          descendants(node).find((child) => child.type === "identifier"),
+          source,
+        ),
+      ),
+  );
+  for (const node of nodes) {
+    if (["struct_specifier", "class_specifier", "union_specifier"].includes(node.type)) {
+      const name = text(
+        descendants(node).find((child) => child.type === "type_identifier"),
+        source,
+      );
+      if (!name || api.classes.some((entry) => entry.name === name)) continue;
+      api.classes.push({
+        name,
+        methods: namedChildren(node.childForFieldName("body"))
+          .filter((member) => member.type === "function_declarator")
+          .map((member) =>
+            fnInfo(text(member.childForFieldName("declarator"), source), member, source),
+          ),
+        properties: descendants(node)
+          .filter((child) => child.type === "field_identifier")
+          .map((child) => ({ name: text(child, source) })),
+      });
+    }
+    if (node.type === "enum_specifier") {
+      const ids = descendants(node).filter((child) =>
+        ["type_identifier", "identifier"].includes(child.type),
+      );
+      const name = text(ids[0], source);
+      if (name && !api.enums.some((entry) => entry.name === name))
+        api.enums.push({ name, cases: ids.slice(1).map((child) => text(child, source)) });
+    }
+    if (node.type === "type_definition") {
+      const name = text(
+        descendants(node).find((child) => child.type === "type_identifier"),
+        source,
+      );
+      if (name) api.aliases.push({ name, definitionLine: signatureLine(node, source) });
+    }
+    if (node.type === "function_definition") {
+      const declarator = descendants(node).find((child) => child.type === "function_declarator");
+      const name = functionDeclaratorName(declarator, source);
+      if (name) api.functions.push(fnInfo(name, node, source));
+    }
+  }
+  if (!isCpp) {
+    for (const declaration of namedChildren(root).filter((node) => node.type === "declaration")) {
+      for (const declarator of descendants(declaration).filter(
+        (node) => node.type === "init_declarator",
+      )) {
+        const name = text(
+          descendants(declarator).find((child) => child.type === "identifier"),
+          source,
+        );
+        if (name) api.globalVars.push({ name, definitionLine: signatureLine(declaration, source) });
+      }
+    }
+  }
+}
+
+function extractCSharp(root: TsNode, source: string, api: FileApi): void {
+  const nodes = descendants(root);
+  api.imports.push(
+    ...nodes.filter((node) => node.type === "using_directive").map((node) => oneLine(node, source)),
+  );
+  for (const node of nodes) {
+    if (
+      node.type === "class_declaration" ||
+      node.type === "struct_declaration" ||
+      node.type === "record_declaration"
+    ) {
+      api.classes.push(extractCSharpClass(node, source));
+    }
+    if (node.type === "interface_declaration")
+      api.interfaces.push(extractCSharpInterface(node, source));
+    if (node.type === "enum_declaration") api.enums.push(extractCSharpEnum(node, source));
+  }
+}
+
+function extractCSharpClass(node: TsNode, source: string): ClassInfo {
+  const info: ClassInfo = {
+    name: text(node.childForFieldName("name"), source),
+    methods: [],
+    properties: [],
+  };
+  for (const member of namedChildren(node.childForFieldName("body"))) {
+    if (["method_declaration", "constructor_declaration"].includes(member.type)) {
+      const name = text(member.childForFieldName("name"), source);
+      if (name) info.methods.push(fnInfo(name, member, source));
+    }
+    if (member.type === "property_declaration" || member.type === "field_declaration") {
+      const name = text(
+        member.childForFieldName("name") ??
+          descendants(member).find((child) => child.type === "identifier"),
+        source,
+      );
+      if (name) info.properties.push({ name, typeName: csharpType(member, source) });
+    }
+  }
+  return info;
+}
+
+function extractCSharpInterface(node: TsNode, source: string): InterfaceInfo {
+  const info: InterfaceInfo = {
+    name: text(node.childForFieldName("name"), source),
+    methods: [],
+    properties: [],
+  };
+  for (const method of descendants(node).filter((child) => child.type === "method_declaration")) {
+    const name = text(method.childForFieldName("name"), source);
+    if (name) info.methods.push(fnInfo(name, method, source));
+  }
+  return info;
+}
+
+function extractCSharpEnum(node: TsNode, source: string): EnumInfo {
+  const name = text(node.childForFieldName("name"), source);
+  const cases = descendants(node)
+    .filter((child) => child.type === "enum_member_declaration")
+    .map((child) =>
+      text(
+        descendants(child).find((item) => item.type === "identifier"),
+        source,
+      ),
+    );
+  return { name, cases };
+}
+
+function extractRuby(root: TsNode, source: string, api: FileApi): void {
+  for (const child of namedChildren(root)) {
+    if (child.type === "call" && /^(require|require_relative)\b/.test(oneLine(child, source)))
+      api.imports.push(oneLine(child, source));
+    if (child.type === "class" || child.type === "module")
+      api.classes.push(extractRubyClass(child, source));
+    if (child.type === "method") {
+      const name = text(child.childForFieldName("name"), source);
+      if (name) api.functions.push(fnInfo(name, child, source));
+    }
+  }
+}
+
+function extractRubyClass(node: TsNode, source: string): ClassInfo {
+  const info: ClassInfo = {
+    name: text(
+      descendants(node).find((child) => ["constant", "scope_resolution"].includes(child.type)),
+      source,
+    ),
+    methods: [],
+    properties: [],
+  };
+  for (const child of descendants(node)) {
+    if (child === node) continue;
+    if (child.type === "method" || child.type === "singleton_method") {
+      const name = text(child.childForFieldName("name"), source);
+      if (name) info.methods.push(fnInfo(name, child, source));
+    }
+    if (child.type === "assignment") {
+      const name = text(namedChildren(child)[0], source);
+      if (name && !info.properties.some((prop) => prop.name === name))
+        info.properties.push({ name });
+    }
+  }
+  return info;
+}
+
+function extractPhp(root: TsNode, source: string, api: FileApi): void {
+  const nodes = descendants(root);
+  api.imports.push(
+    ...nodes
+      .filter((node) => node.type === "namespace_use_declaration")
+      .map((node) => oneLine(node, source)),
+  );
+  for (const node of nodes) {
+    if (node.type === "class_declaration" || node.type === "trait_declaration")
+      api.classes.push(extractPhpClass(node, source));
+    if (node.type === "interface_declaration")
+      api.interfaces.push(extractPhpInterface(node, source));
+    if (node.type === "enum_declaration") api.enums.push(extractPhpEnum(node, source));
+    if (node.type === "function_definition") {
+      const name = text(node.childForFieldName("name"), source);
+      if (name) api.functions.push(fnInfo(name, node, source));
+    }
+  }
+}
+
+function extractPhpClass(node: TsNode, source: string): ClassInfo {
+  const info: ClassInfo = {
+    name: text(node.childForFieldName("name"), source),
+    methods: [],
+    properties: [],
+  };
+  for (const member of namedChildren(node.childForFieldName("body"))) {
+    if (member.type === "method_declaration") {
+      const name = text(member.childForFieldName("name"), source);
+      if (name) info.methods.push(fnInfo(name, member, source));
+    }
+    if (member.type === "property_declaration") {
+      for (const prop of descendants(member).filter((child) => child.type === "property_element")) {
+        const name = text(prop, source).replace(/^\$/, "");
+        if (name) info.properties.push({ name, typeName: phpType(member, source) });
+      }
+    }
+  }
+  return info;
+}
+
+function extractPhpInterface(node: TsNode, source: string): InterfaceInfo {
+  const info: InterfaceInfo = {
+    name: text(node.childForFieldName("name"), source),
+    methods: [],
+    properties: [],
+  };
+  for (const method of descendants(node).filter((child) => child.type === "method_declaration")) {
+    const name = text(method.childForFieldName("name"), source);
+    if (name) info.methods.push(fnInfo(name, method, source));
+  }
+  return info;
+}
+
+function extractPhpEnum(node: TsNode, source: string): EnumInfo {
+  const name = text(node.childForFieldName("name"), source);
+  const cases = descendants(node)
+    .filter((child) => child.type === "enum_case")
+    .map((child) => text(child.childForFieldName("name") ?? namedChildren(child)[0], source));
+  return { name, cases };
+}
+
+function extractDart(root: TsNode, source: string, api: FileApi): void {
+  for (const child of namedChildren(root)) {
+    if (child.type === "import_or_export") api.imports.push(oneLine(child, source));
+    if (child.type === "type_alias") {
+      const name = text(
+        descendants(child).find((node) => node.type === "type_identifier"),
+        source,
+      );
+      if (name) api.aliases.push({ name, definitionLine: signatureLine(child, source) });
+    }
+    if (child.type === "enum_declaration") api.enums.push(extractDartEnum(child, source));
+    if (child.type === "class_definition") api.classes.push(extractDartClass(child, source));
+    if (child.type === "function_signature") {
+      const name = text(child.childForFieldName("name"), source);
+      if (name) api.functions.push(fnInfo(name, child, source));
+    }
+  }
+}
+
+function extractDartClass(node: TsNode, source: string): ClassInfo {
+  const info: ClassInfo = {
+    name: text(node.childForFieldName("name"), source),
+    methods: [],
+    properties: [],
+  };
+  for (const member of namedChildren(node.childForFieldName("body"))) {
+    if (member.type === "declaration") {
+      const signature = descendants(member).find((child) =>
+        [
+          "constructor_signature",
+          "function_signature",
+          "getter_signature",
+          "setter_signature",
+        ].includes(child.type),
+      );
+      if (signature) {
+        const name = dartMethodName(signature, source);
+        if (name) info.methods.push(fnInfo(name, member, source));
+      } else {
+        const name = text(
+          descendants(member).find((child) => child.type === "initialized_identifier_list"),
+          source,
+        );
+        if (name) info.properties.push({ name, typeName: dartType(member, source) });
+      }
+    }
+    if (member.type === "method_signature") {
+      const name = dartMethodName(member, source);
+      if (name) info.methods.push(fnInfo(name, member, source));
+    }
+  }
+  return info;
+}
+
+function extractDartEnum(node: TsNode, source: string): EnumInfo {
+  const name = text(node.childForFieldName("name"), source);
+  const cases = descendants(node)
+    .filter((child) => child.type === "enum_constant")
+    .map((child) => text(child.childForFieldName("name") ?? namedChildren(child)[0], source));
+  return { name, cases };
+}
+
 function appendClasses(
   lines: string[],
   title: string,
@@ -641,7 +1178,13 @@ function appendProps(
   lines.push(`${titleIndent}${title}:`);
   appendCapped(
     lines,
-    values.map((prop) => (prop.typeName ? `${prop.name}: ${prop.typeName}` : prop.name)),
+    values.map((prop) =>
+      prop.definitionLine
+        ? prop.definitionLine
+        : prop.typeName
+          ? `${prop.name}: ${prop.typeName}`
+          : prop.name,
+    ),
     itemIndent,
     maxTokens,
   );
@@ -667,6 +1210,15 @@ function appendVars(lines: string[], values: VariableInfo[], maxTokens: number):
     "  ",
     maxTokens,
   );
+}
+
+function appendPackage(lines: string[], info: PackageInfo | undefined, maxTokens: number): void {
+  if (!info) return;
+  lines.push("", "Package:");
+  if (info.name) lines.push(`  - name: ${info.name}`);
+  appendSimple(lines, "Products", info.products, maxTokens);
+  appendSimple(lines, "Dependencies", info.dependencies, maxTokens);
+  appendSimple(lines, "Targets", info.targets, maxTokens);
 }
 
 function appendSimple(lines: string[], title: string, values: string[], maxTokens: number): void {
@@ -802,6 +1354,78 @@ function typeFromAnnotation(node: TsNode, source: string): string | undefined {
   const annotation = descendants(node).find((child) => child.type === "type_annotation");
   if (!annotation) return undefined;
   return text(annotation, source).replace(/^:\s*/, "").trim() || undefined;
+}
+
+function javaType(node: TsNode, source: string): string | undefined {
+  return text(
+    namedChildren(node).find((child) =>
+      ["type_identifier", "generic_type", "void_type", "integral_type", "boolean_type"].includes(
+        child.type,
+      ),
+    ),
+    source,
+  );
+}
+
+function csharpType(node: TsNode, source: string): string | undefined {
+  return text(
+    namedChildren(node).find((child) =>
+      ["predefined_type", "identifier", "generic_name", "qualified_name"].includes(child.type),
+    ),
+    source,
+  );
+}
+
+function phpType(node: TsNode, source: string): string | undefined {
+  return text(
+    namedChildren(node).find((child) =>
+      ["primitive_type", "named_type", "qualified_name", "optional_type"].includes(child.type),
+    ),
+    source,
+  );
+}
+
+function dartType(node: TsNode, source: string): string | undefined {
+  return text(
+    namedChildren(node).find((child) => ["type_identifier", "type_arguments"].includes(child.type)),
+    source,
+  );
+}
+
+function functionDeclaratorName(node: TsNode | null | undefined, source: string): string {
+  if (!node) return "";
+  const qualified = descendants(node).find((child) => child.type === "qualified_identifier");
+  if (qualified) return oneLine(qualified, source);
+  return text(
+    descendants(node).find((child) =>
+      ["identifier", "field_identifier", "type_identifier"].includes(child.type),
+    ),
+    source,
+  );
+}
+
+function dartMethodName(node: TsNode, source: string): string {
+  return (
+    text(node.childForFieldName("name"), source) ||
+    text(
+      descendants(node).find((child) => child.type === "identifier"),
+      source,
+    )
+  );
+}
+
+function firstMatch(source: string, pattern: RegExp): string | undefined {
+  return source.match(pattern)?.[1];
+}
+
+function callSummaries(source: string, pattern: RegExp): string[] {
+  return [...source.matchAll(pattern)].map((match) => {
+    const kind = match[1] ?? "item";
+    const args = match[2] ?? "";
+    const name = firstMatch(args, /\bname:\s*"([^"]+)"/) ?? firstMatch(args, /\burl:\s*"([^"]+)"/);
+    if (!name) return kind;
+    return `${kind} ${name.split("/").pop()}`;
+  });
 }
 
 function oneLine(node: TsNode, source: string): string {
