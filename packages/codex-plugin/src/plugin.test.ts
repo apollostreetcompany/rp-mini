@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -110,12 +110,13 @@ describe("Codex plugin package", () => {
   it("passes bash syntax checks and installs/uninstalls idempotently in sandboxed HOME", () => {
     const installScript = join(pluginRoot, "install.sh");
     execFileSync("bash", ["-n", installScript], { cwd: repoRoot });
+    expect(statSync(installScript).mode & 0o111).toBeGreaterThan(0);
 
     const home = mkdtempSync(join(tmpdir(), "rp-mini-codex-home-"));
     try {
       const env = { ...process.env, HOME: home };
-      const first = execFileSync("bash", [installScript], { cwd: repoRoot, env, encoding: "utf8" });
-      const second = execFileSync("bash", [installScript], {
+      const first = execFileSync(installScript, [], { cwd: repoRoot, env, encoding: "utf8" });
+      const second = execFileSync(installScript, [], {
         cwd: repoRoot,
         env,
         encoding: "utf8",
@@ -140,7 +141,7 @@ describe("Codex plugin package", () => {
         expect(existsSync(join(home, ".codex/skills", `rp-mini-${skill}`, "SKILL.md"))).toBe(true);
       }
 
-      execFileSync("bash", [installScript, "--uninstall"], { cwd: repoRoot, env });
+      execFileSync(installScript, ["--uninstall"], { cwd: repoRoot, env });
       expect(existsSync(join(home, ".codex/skills/rp-mini-rp-build"))).toBe(false);
       expect(existsSync(join(home, ".codex/skills/rp-mini-context-builder"))).toBe(false);
     } finally {

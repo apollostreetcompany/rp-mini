@@ -39,7 +39,7 @@ export interface RpMiniServerOptions {
   now?: () => Date;
 }
 
-type ToolDefinition = {
+export type ToolDefinition = {
   name: string;
   description: string;
   inputSchema: z.ZodTypeAny;
@@ -49,7 +49,7 @@ type ToolDefinition = {
 const positiveInt = z.number().int().positive();
 const nonNegativeInt = z.number().int().nonnegative();
 
-const toolDefinitions: ToolDefinition[] = [
+export const toolDefinitions: ToolDefinition[] = [
   {
     name: "file_search",
     description:
@@ -297,6 +297,28 @@ export function createRpMiniServer(options: RpMiniServerOptions = {}): McpServer
   }
 
   return server;
+}
+
+export async function runRpMiniTool(
+  name: string,
+  args: unknown,
+  options: RpMiniServerOptions = {},
+): Promise<unknown> {
+  const config = mergeConfig(defaultConfig, options.config ?? {}, options.roots);
+  const definition = toolDefinitions.find((tool) => tool.name === name);
+  if (!definition) {
+    throw new Error(`Unknown tool: ${name}`);
+  }
+  if (definition.enabled && !definition.enabled(config)) {
+    throw new Error(`Tool disabled by config: ${name}`);
+  }
+  const parsed = definition.inputSchema.parse(args);
+  return handleTool(name, parsed, {
+    config,
+    stateRef: {},
+    sessionId: options.sessionId,
+    now: options.now ?? (() => new Date()),
+  });
 }
 
 interface HandlerContext {

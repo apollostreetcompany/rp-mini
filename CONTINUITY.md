@@ -30,6 +30,7 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 17. (2026-06-10) Bead 12 benchmark must not write to `../repoprompt-ce`; `scripts/bench.mjs` reads the source corpus and measures against a temporary working copy so `.rp-mini` cache/export writes stay outside the reference checkout.
 18. (2026-06-10) Bead 12 benchmark observed a real search anomaly: broad content queries such as `import` on the reference corpus can hit Node `execFile` stdout `maxBuffer` before rp-mini result caps shape the response. No ARG_MAX failure was observed separately; this is a post-MVP search streaming/capping follow-up.
 19. (2026-06-10) Bead 13 entry: benchmark three CE-repo investigation routes on `codex/docs/bead-13-investigation-benchmark`: installed rp-mini `/rp-investigate`, normal RepoPrompt `rp-investigate`, and non-RepoPrompt shell/Codex investigation. Risk class: Low research/docs; rigor: delegated subagent receipts, wall-clock timing, output-quality comparison, and local documentation artifact.
+20. (2026-06-10) Bead 14 entry: resolve benchmark tool friction by adding shell CLI wrappers over the shared MCP tool dispatcher, adding CLI help, making the Codex installer executable, and clearing the generated CE `.rp-mini/` cache through a recoverable move. Risk class: Medium because CLI/user setup behavior changes; rigor: targeted CLI tests, plugin installer mode test, full build/format/test, PR merge to main.
 
 ## State
 
@@ -50,16 +51,16 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - [x] Bead 13 complete on `codex/docs/bead-13-investigation-benchmark`: three shell-capable subagents investigated `../repoprompt-ce` via installed rp-mini, normal RepoPrompt, and shell-only routes; benchmark synthesized in `docs/analysis/investigation-benchmark-2026-06-10.md` and work committed as `491238ba2864198ad879246605e265badcc5af0e`. Validation: `pnpm format:check` passed. Result: shell fastest wall clock (155s), normal RepoPrompt best guided synthesis (638s total, 447.7137s context_builder), rp-mini showed strong cache substrate (45.54s cold index, 0.66s warm index) but not hot-loaded slash workflow in the existing Codex process.
 
 ### Now
-- Bead 13 evidence appended; branch ready for supervisor review/push. Agent selected: primary Codex orchestrator plus three shell-capable explore subagents; confidence high; fallback agent: manual shell/RP verification. Risk class: Low research/docs; rigor: wall-clock timing, artifact receipts, output comparison, and format validation.
+- Bead 14 in progress on `codex/docs/bead-13-investigation-benchmark`: shell CLI wrappers, `--help`, executable Codex installer, docs updates, and CE cache cleanup before PR/merge. Agent selected: primary Codex implementer; confidence high; fallback agent: manual MCP smoke through `serve`. Risk class: Medium; rigor: targeted CLI tests plus full validation.
 
 ### Next
-- Review Bead 13 branch and decide whether to clean the generated CE `.rp-mini/` cache from the reference checkout.
+- Create/merge PR to main, then install rp-mini into global Codex and rerun the investigation benchmark from a fresh window/process.
 
 ## Open Questions
 - UNCONFIRMED: final published name ("rp-mini" working title; RepoPrompt trademark courtesy check before any public release)
 - Slice anchor-rebase deferred (v1 invalidates slices on content change)
 - Post-MVP search streaming/capping fix: avoid `execFile` stdout `maxBuffer` overflows on broad content queries before result caps are applied.
-- UNCONFIRMED: whether to delete the generated `/Users/kikimac/Documents/repoprompt-ce-refactor/repoprompt-ce/.rp-mini/` cache created by the direct rp-mini shakedown index; left untouched.
+- Generated `/Users/kikimac/Documents/repoprompt-ce-refactor/repoprompt-ce/.rp-mini/` cache was cleared from the CE checkout by moving it to `/tmp/rp-mini-ce-cache-cleared-20260610-073526`.
 
 ## Working Set
 - docs/plans/rp-mini-design-2026-06-10.md — canonical design

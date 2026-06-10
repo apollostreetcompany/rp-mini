@@ -15,10 +15,29 @@ The Claude plugin lives at `packages/cc-plugin` and includes `.mcp.json`, a gene
 ### Codex
 
 1. Build the workspace: `pnpm install && pnpm build && pnpm build:prompts`
-2. Install skills and print the MCP config snippet: `bash packages/codex-plugin/install.sh`
+2. Install skills and print the MCP config snippet: `packages/codex-plugin/install.sh`
 3. To append the MCP snippet to `~/.codex/config.toml`, rerun with `--write-config`.
 
-The Codex plugin lives at `packages/codex-plugin`; uninstall with `bash packages/codex-plugin/install.sh --uninstall`.
+The Codex plugin lives at `packages/codex-plugin`; uninstall with `packages/codex-plugin/install.sh --uninstall`.
+
+## Shell CLI
+
+The server package also exposes a direct shell CLI for use without a loaded Codex, Claude, or MCP client:
+
+```sh
+node packages/server/dist/cli.js --help
+node packages/server/dist/cli.js index /path/to/workspace
+node packages/server/dist/cli.js search /path/to/workspace ContextBuilder --max-results 20
+node packages/server/dist/cli.js read /path/to/workspace Sources/App.ts --start-line 40 --limit 80
+node packages/server/dist/cli.js tree /path/to/workspace --mode folders --max-depth 3
+node packages/server/dist/cli.js structure /path/to/workspace Sources/App.ts
+```
+
+Common wrappers cover search, read, tree, structure, selection, prompt/context packaging, git, edits, file actions, token counting, and indexing. Any MCP tool can also be invoked directly:
+
+```sh
+node packages/server/dist/cli.js tool /path/to/workspace file_search --json-args '{"pattern":"ContextBuilder","max_results":10}'
+```
 
 ## Configuration
 

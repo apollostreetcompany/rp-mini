@@ -62,13 +62,22 @@ Claude Code:
 
 Codex:
 - Plugin root: `packages/codex-plugin`
-- Local install: `bash packages/codex-plugin/install.sh`
-- Optional config write: `bash packages/codex-plugin/install.sh --write-config`
+- Local install: `packages/codex-plugin/install.sh`
+- Optional config write: `packages/codex-plugin/install.sh --write-config`
 - MCP snippet: `packages/codex-plugin/config/mcp-servers.toml`
 - Generated context-builder skill: `packages/codex-plugin/skills/context-builder/SKILL.md`
 - Skills installed under `~/.codex/skills/rp-mini-*`
 
 Both plugins consume the same server command and shared discovery prompt source.
+
+Shell CLI smoke:
+
+```sh
+node packages/server/dist/cli.js --help
+node packages/server/dist/cli.js search /path/to/workspace ContextBuilder --max-results 10
+node packages/server/dist/cli.js tree /path/to/workspace --mode folders --max-depth 3
+node packages/server/dist/cli.js tool /path/to/workspace file_search --json-args '{"pattern":"ContextBuilder","max_results":3}'
+```
 
 ## Release Checklist Placeholder
 
@@ -77,8 +86,9 @@ Both plugins consume the same server command and shared discovery prompt source.
 3. Run `node scripts/bench.mjs ../repoprompt-ce --date <YYYY-MM-DD>` and update `docs/bench.md`.
 4. Verify Claude plugin install from a clean checkout.
 5. Verify Codex plugin install and `--write-config` idempotence in a temporary HOME.
-6. Verify `node packages/server/dist/cli.js serve --root <fixture>` with a real MCP client.
-7. Confirm `THIRD_PARTY_NOTICES.md` and Apache-2.0 attribution are current.
-8. Tag release and publish packages/artifacts after review.
+6. Verify shell CLI help/search/tree/generic-tool smoke commands.
+7. Verify `node packages/server/dist/cli.js serve --root <fixture>` with a real MCP client.
+8. Confirm `THIRD_PARTY_NOTICES.md` and Apache-2.0 attribution are current.
+9. Tag release and publish packages/artifacts after review.
 
 Rollback before first public release: revert the bead branch or remove installed plugin files with the Codex uninstall path and Claude plugin manager.
