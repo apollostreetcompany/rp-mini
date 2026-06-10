@@ -50,6 +50,15 @@ describe("codemaps", () => {
     ["py-smoke.py", "src/smoke.py", ["Worker", "Status", "build_worker"]],
     ["go-smoke.go", "src/smoke.go", ["Worker", "Run", "NewWorker"]],
     ["rs-smoke.rs", "src/smoke.rs", ["Task", "new", "default_task"]],
+    // Fixture shape adapted from CE CodeMap fixtures/goldens.
+    ["swift-smoke.swift", "src/smoke.swift", ["FriendlyGreeter", "Greeter", "makeGreeter"]],
+    ["java-smoke.java", "src/smoke.java", ["Task", "TaskRepository", "TaskStatus", "load"]],
+    ["c-smoke.c", "src/smoke.c", ["Task", "TaskStatus", "TaskCount", "add"]],
+    ["cpp-smoke.cpp", "src/smoke.cpp", ["Task", "TaskService", "TaskStatus", "draft"]],
+    ["csharp-smoke.cs", "src/smoke.cs", ["Task", "ITaskRepository", "TaskStatus", "Rename"]],
+    ["ruby-smoke.rb", "src/smoke.rb", ["Task", "TaskFormatting", "build_task", "rename"]],
+    ["php-smoke.php", "src/smoke.php", ["Task", "TaskRepository", "HasTaskTitle", "task_label"]],
+    ["dart-smoke.dart", "src/smoke.dart", ["Task", "TaskRepository", "TaskStatus", "makeTask"]],
   ])("extracts structure from %s", async (fixture, target, expectedNames) => {
     const root = await tempRoot(basename(fixture));
     await copyFixture(root, fixture, target);
@@ -62,6 +71,90 @@ describe("codemaps", () => {
     expect(text).toContain(`File: ${target}`);
     for (const name of expectedNames) expect(text).toContain(name);
     expect(result.limit_hit).toBe(false);
+  });
+
+  it("renders SwiftUI property wrappers, body marker, and preview count", async () => {
+    const root = await tempRoot("swiftui");
+    await copyFixture(root, "swiftui-view.swift", "Sources/App/CounterView.swift");
+    const catalog = await buildCatalog([root], withConfig());
+
+    const result = await getCodeStructures(catalog, withConfig(), {
+      paths: ["Sources/App/CounterView.swift"],
+    });
+
+    expect(result.files).toHaveLength(1);
+    expect(result.files[0]!.text).toContain("Previews: 2");
+    expect(result.files[0]!.text).toContain("CounterModel");
+    expect(result.files[0]!.text).not.toContain("  - Observable");
+    expect(result.files[0]!.text).toContain("View body");
+    expect(result.files[0]!.text).toContain("@State private var count: Int");
+    expect(result.files[0]!.text).toContain("@Binding var title: String");
+    expect(result.files[0]!.text).toContain("@Environment(\\.colorScheme) private var colorScheme");
+    expect(result.files[0]!.text).toContain("@StateObject private var store");
+    expect(result.files[0]!.text).toContain("@ObservedObject var legacy: LegacyStore");
+    expect(result.files[0]!.text).toContain("@Published var isReady: Bool");
+  });
+
+  it("renders a compact Package.swift dependency surface", async () => {
+    const root = await tempRoot("package-swift");
+    await copyFixture(root, "Package.swift", "Package.swift");
+    const catalog = await buildCatalog([root], withConfig());
+
+    const result = await getCodeStructures(catalog, withConfig(), { paths: ["Package.swift"] });
+
+    expect(result.files).toHaveLength(1);
+    const text = result.files[0]!.text;
+    expect(text).toContain("Package:");
+    expect(text).toContain("name: CounterKit");
+    expect(text).toContain("Products:");
+    expect(text).toContain("library CounterKit");
+    expect(text).toContain("executable CounterTool");
+    expect(text).toContain("Dependencies:");
+    expect(text).toContain("swift-argument-parser");
+    expect(text).toContain("Targets:");
+    expect(text).toContain("target CounterKit");
+    expect(text).toContain("executableTarget CounterTool");
+    expect(text).toContain("testTarget CounterKitTests");
+  });
+
+  it("maps bead 9 extensions to codemap languages", async () => {
+    const root = await tempRoot("extensions");
+    const files = [
+      "App.swift",
+      "Task.java",
+      "task.c",
+      "task.h",
+      "task.cpp",
+      "task.cc",
+      "task.hpp",
+      "Task.cs",
+      "task.rb",
+      "task.php",
+      "task.dart",
+    ];
+    for (const file of files) await write(root, file, "placeholder\n");
+    const catalog = await buildCatalog([root], withConfig());
+
+    const codemapTargets = catalog.roots[0]!.files.filter((file) =>
+      canCodemapFile(file, withConfig()),
+    )
+      .map((file) => file.relativePath)
+      .sort();
+
+    expect(codemapTargets).toEqual(files.sort());
+  });
+
+  it("gracefully skips files whose language is not enabled", async () => {
+    const root = await tempRoot("disabled-language");
+    await copyFixture(root, "swift-smoke.swift", "src/smoke.swift");
+    const config = withConfig({ codemaps: { languages: ["ts"] } });
+    const catalog = await buildCatalog([root], config);
+
+    const result = await getCodeStructures(catalog, config, { paths: ["src/smoke.swift"] });
+
+    expect(result.files).toHaveLength(0);
+    expect(result.limit_hit).toBe(true);
+    expect(result.omitted_total).toBe(1);
   });
 
   it("serializes CE-compatible sections and truncates long member lists", async () => {

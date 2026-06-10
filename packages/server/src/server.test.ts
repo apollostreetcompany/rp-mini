@@ -166,6 +166,43 @@ describe("rp-mini MCP server", () => {
     expect(payload.limit_hit).toBe(false);
   });
 
+  it("serves SwiftUI codemap metadata over the linked transport", async () => {
+    const root = await tempRoot();
+    await write(
+      join(root, "Sources", "App", "CounterView.swift"),
+      [
+        "import SwiftUI",
+        "",
+        "struct CounterView: View {",
+        "    @State private var count: Int = 0",
+        "    @Binding var title: String",
+        "",
+        "    var body: some View {",
+        "        Text(title)",
+        "    }",
+        "}",
+        "",
+        "#Preview {",
+        '    CounterView(title: .constant("Preview"))',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const { client } = await connectedClient({ roots: [root] });
+
+    const result = await client.callTool({
+      name: "get_code_structure",
+      arguments: { paths: ["Sources/App/CounterView.swift"] },
+    });
+    const payload = JSON.parse(firstText(result)) as { files: Array<{ text: string }> };
+
+    expect(payload.files).toHaveLength(1);
+    expect(payload.files[0]!.text).toContain("@State private var count: Int");
+    expect(payload.files[0]!.text).toContain("@Binding var title: String");
+    expect(payload.files[0]!.text).toContain("View body");
+    expect(payload.files[0]!.text).toContain("Previews: 1");
+  });
+
   it("returns the selected-scope placeholder until selection exists", async () => {
     const { client } = await connectedClient();
 

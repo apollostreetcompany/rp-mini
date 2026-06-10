@@ -5,6 +5,7 @@
 - Package manager: pnpm 10.16.1.
 - Module format: ESM.
 - Search runtime: `file_search` resolves ripgrep via `Config.search.ripgrep_path` / `RP_MINI_RIPGREP_PATH`, then optional `@vscode/ripgrep`, then PATH `rg`.
+- CodeMap parser runtime: `@vscode/tree-sitter-wasm` for VS Code-shipped grammars; `tree-sitter-wasms@0.1.13` supplies prebuilt Swift, C, and Dart WASM grammars for Bead 9.
 
 ## Local Commands
 - Install: `pnpm install`

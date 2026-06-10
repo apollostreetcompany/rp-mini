@@ -49,4 +49,36 @@ describe("rp-mini index CLI", () => {
     expect(snapshot.roots[0]?.files).toHaveLength(1);
     expect(snapshot.roots[0]?.dirs).toHaveLength(0);
   });
+
+  it("warms codemaps for bead 9 languages in a fixture tree", async () => {
+    const root = await tempRoot();
+    await writeFile(
+      join(root, "View.swift"),
+      "import SwiftUI\nstruct ViewModel { let title: String }\n",
+    );
+    await writeFile(join(root, "Task.java"), 'class Task { String label() { return ""; } }\n');
+    await writeFile(
+      join(root, "task.c"),
+      "#include <stddef.h>\nint add(int a, int b) { return a + b; }\n",
+    );
+    await writeFile(
+      join(root, "task.cpp"),
+      "#include <string>\nclass Task { public: std::string label() const; };\n",
+    );
+    await writeFile(join(root, "Task.cs"), 'class Task { string Label() => ""; }\n');
+    await writeFile(join(root, "task.rb"), 'class Task\n  def label\n    ""\n  end\nend\n');
+    await writeFile(
+      join(root, "task.php"),
+      "<?php\nclass Task { public function label(): string { return ''; } }\n",
+    );
+    await writeFile(join(root, "task.dart"), "class Task { String label() => ''; }\n");
+
+    const result = await execFileAsync(
+      "node",
+      [join(process.cwd(), "packages/server/dist/cli.js"), "index", root],
+      { cwd: root },
+    );
+
+    expect(result.stdout).toMatch(/codemaps: 0 cached, 8 computed, 0 skipped\(gated\)/);
+  }, 60_000);
 });
