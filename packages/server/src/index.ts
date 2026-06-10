@@ -13,6 +13,7 @@ import {
   gitStatus,
   getCodeStructures,
   getCatalog,
+  loadConfig,
   readFileSlice,
   relativeToRoot,
   resolveRootPath,
@@ -28,8 +29,8 @@ import {
   type SelectionSnapshot,
 } from "@rp-mini/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
 
 export interface RpMiniServerOptions {
@@ -48,14 +49,20 @@ export type ToolDefinition = {
 
 const positiveInt = z.number().int().positive();
 const nonNegativeInt = z.number().int().nonnegative();
+const rootArg = z
+  .string()
+  .min(1)
+  .optional()
+  .describe("Absolute path of an alternative workspace root to target for this call.");
 
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: "file_search",
     description:
-      "Search files by path, content, or both. Defaults to mode=auto, max_results=50, response caps with limit_hit semantics.",
+      "Search files by path, content, or both. Defaults to mode=auto, max_results=50, response caps with limit_hit semantics. Optional root targets another absolute workspace root.",
     inputSchema: z
       .object({
+        root: rootArg,
         pattern: z.string().min(1),
         mode: z.enum(["auto", "path", "content", "both"]).default("auto"),
         regex: z.boolean().default(false),
@@ -76,9 +83,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "read_file",
     description:
-      "Read one file by path with optional start_line, negative tail offsets, and line limit; returns range metadata.",
+      "Read one file by path with optional start_line, negative tail offsets, and line limit; returns range metadata. Optional root targets another workspace root.",
     inputSchema: z
       .object({
+        root: rootArg,
         path: z.string().min(1),
         start_line: z.number().int().optional(),
         limit: positiveInt.optional(),
@@ -88,9 +96,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "get_file_tree",
     description:
-      "Render workspace tree in auto/full/folders/selected mode, with max_depth and auto-trim target caps.",
+      "Render workspace tree in auto/full/folders/selected mode, with max_depth and auto-trim target caps. Optional root targets another workspace root.",
     inputSchema: z
       .object({
+        root: rootArg,
         mode: z.enum(["auto", "full", "folders", "selected"]).default("auto"),
         max_depth: nonNegativeInt.optional(),
         path: z.string().min(1).optional(),
@@ -100,9 +109,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "get_code_structure",
     description:
-      "Return codemap text for explicit paths or selected scope, max_results default 10 and structure token cap.",
+      "Return codemap text for explicit paths or selected scope, max_results default 10 and structure token cap. Optional root targets another workspace root.",
     inputSchema: z
       .object({
+        root: rootArg,
         paths: z.array(z.string().min(1)).optional(),
         scope: z.enum(["selected"]).optional(),
         max_results: positiveInt.default(10),
@@ -115,9 +125,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "manage_selection",
     description:
-      "Manage context selection: get/add/remove/set/clear/promote/demote with full, slices, or codemap_only modes.",
+      "Manage context selection: get/add/remove/set/clear/promote/demote with full, slices, or codemap_only modes. Optional root targets another workspace root.",
     inputSchema: z
       .object({
+        root: rootArg,
         op: z.enum([
           "get",
           "add",
@@ -160,9 +171,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "workspace_context",
     description:
-      "Snapshot or export prompt, selection, code, files, tree, and token breakdown for budget checks.",
+      "Snapshot or export prompt, selection, code, files, tree, and token breakdown for budget checks. Optional root targets another workspace root.",
     inputSchema: z
       .object({
+        root: rootArg,
         op: z.enum(["snapshot", "export"]).default("snapshot"),
         include: z
           .array(z.enum(["prompt", "selection", "code", "files", "tree", "tokens", "git_diff"]))
@@ -177,9 +189,10 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "prompt",
     description:
-      "Get, set, append, or clear curated handoff instructions stored with the selection.",
+      "Get, set, append, or clear curated handoff instructions stored with the selection. Optional root targets another workspace root.",
     inputSchema: z
       .object({
+        root: rootArg,
         op: z.enum(["get", "set", "append", "clear"]),
         text: z.string().optional(),
       })
@@ -191,10 +204,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "apply_edits",
     description:
-      "Apply rewrite, single search/replace, or edits[] using the later edit ladder; disabled by config when false.",
+      "Apply rewrite, single search/replace, or edits[] using the later edit ladder; disabled by config when false. Optional root targets another workspace root.",
     enabled: (config) => config.tools.apply_edits,
     inputSchema: z
       .object({
+        root: rootArg,
         path: z.string().min(1),
         search: z.string().optional(),
         replace: z.string().optional(),
@@ -233,10 +247,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "file_actions",
     description:
-      "Create, delete, or move files with if_exists guard; disabled by config when false.",
+      "Create, delete, or move files with if_exists guard; disabled by config when false. Optional root targets another workspace root.",
     enabled: (config) => config.tools.file_actions,
     inputSchema: z
       .object({
+        root: rootArg,
         action: z.enum(["create", "delete", "move"]).optional(),
         op: z.enum(["create", "delete", "move"]).optional(),
         path: z.string().min(1),
@@ -253,10 +268,11 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "git",
     description:
-      "Read-only git status/diff/log/show/blame with compare specs, detail levels, structured hunks, and safe flags.",
+      "Read-only git status/diff/log/show/blame with compare specs, detail levels, structured hunks, and safe flags. Optional root targets another workspace root.",
     enabled: (config) => config.tools.git,
     inputSchema: z
       .object({
+        root: rootArg,
         op: z.enum(["status", "diff", "log", "show", "blame"]),
         compare: z.string().optional(),
         detail: z.enum(["summary", "files", "patches", "full"]).default("summary"),
@@ -274,6 +290,12 @@ export function createRpMiniServer(options: RpMiniServerOptions = {}): McpServer
   const config = mergeConfig(defaultConfig, options.config ?? {}, options.roots);
   const stateRef: { state?: SelectionState } = {};
   const now = options.now ?? (() => new Date());
+  const resolveContext = createContextResolver({
+    config,
+    stateRef,
+    sessionId: options.sessionId,
+    now,
+  });
   const server = new McpServer({ name: "rp-mini", version: "0.0.0" });
 
   for (const definition of toolDefinitions) {
@@ -285,14 +307,7 @@ export function createRpMiniServer(options: RpMiniServerOptions = {}): McpServer
         inputSchema: definition.inputSchema,
       },
       async (args) =>
-        toolResponse(
-          await handleTool(definition.name, args, {
-            config,
-            stateRef,
-            sessionId: options.sessionId,
-            now,
-          }),
-        ),
+        toolResponse(await handleTool(definition.name, args, await resolveContext(args))),
     );
   }
 
@@ -305,6 +320,7 @@ export async function runRpMiniTool(
   options: RpMiniServerOptions = {},
 ): Promise<unknown> {
   const config = mergeConfig(defaultConfig, options.config ?? {}, options.roots);
+  const stateRef: { state?: SelectionState } = {};
   const definition = toolDefinitions.find((tool) => tool.name === name);
   if (!definition) {
     throw new Error(`Unknown tool: ${name}`);
@@ -313,12 +329,13 @@ export async function runRpMiniTool(
     throw new Error(`Tool disabled by config: ${name}`);
   }
   const parsed = definition.inputSchema.parse(args);
-  return handleTool(name, parsed, {
+  const resolveContext = createContextResolver({
     config,
-    stateRef: {},
+    stateRef,
     sessionId: options.sessionId,
     now: options.now ?? (() => new Date()),
   });
+  return handleTool(name, parsed, await resolveContext(parsed));
 }
 
 interface HandlerContext {
@@ -326,9 +343,129 @@ interface HandlerContext {
   stateRef: { state?: SelectionState };
   sessionId?: string;
   now: () => Date;
+  error?: { code: RootTargetError; message: string };
+}
+
+type RootTargetError =
+  | "root_not_absolute"
+  | "root_not_found"
+  | "root_not_directory"
+  | "dynamic_roots_disabled";
+
+interface DynamicRootContext {
+  config: Config;
+  stateRef: { state?: SelectionState };
+}
+
+function createContextResolver(
+  primary: HandlerContext,
+): (args: unknown) => Promise<HandlerContext> {
+  const dynamicContexts = new Map<string, DynamicRootContext>();
+  let primaryRealRoots: Promise<Set<string>> | undefined;
+
+  return async (args: unknown): Promise<HandlerContext> => {
+    const root = rootFromArgs(args);
+    if (root === undefined) return primary;
+    const resolved = await validateRoot(root);
+    if ("error" in resolved) {
+      return errorContext(primary, resolved.error, resolved.message);
+    }
+    const realRoot = resolved.realRoot;
+    primaryRealRoots ??= realRoots(primary.config.roots);
+    if ((await primaryRealRoots).has(realRoot)) return primary;
+    if (!primary.config.dynamic_roots.enabled) {
+      return errorContext(primary, "dynamic_roots_disabled", "Dynamic roots are disabled.");
+    }
+
+    const existing = dynamicContexts.get(realRoot);
+    if (existing) {
+      dynamicContexts.delete(realRoot);
+      dynamicContexts.set(realRoot, existing);
+      return { ...primary, ...existing };
+    }
+
+    const context = {
+      // Matches CLI `tool <workspace>` dispatch so each targeted workspace reads its own config.
+      config: await loadConfig(realRoot, { roots: [realRoot] }),
+      stateRef: {},
+    };
+    dynamicContexts.set(realRoot, context);
+    const max = Math.max(1, primary.config.dynamic_roots.max);
+    while (dynamicContexts.size > max) {
+      const oldest = dynamicContexts.keys().next().value;
+      if (oldest === undefined) break;
+      dynamicContexts.delete(oldest);
+    }
+    return { ...primary, ...context };
+  };
+}
+
+function rootFromArgs(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") return undefined;
+  const root = (args as { root?: unknown }).root;
+  return typeof root === "string" ? root : undefined;
+}
+
+async function validateRoot(root: string): Promise<
+  | { realRoot: string }
+  | {
+      error: RootTargetError;
+      message: string;
+    }
+> {
+  if (!isAbsolute(root)) {
+    return { error: "root_not_absolute", message: "root must be an absolute path." };
+  }
+  let info;
+  try {
+    info = await stat(root);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return { error: "root_not_found", message: `${root} does not exist.` };
+    }
+    throw error;
+  }
+  if (!info.isDirectory()) {
+    return { error: "root_not_directory", message: `${root} is not a directory.` };
+  }
+  return { realRoot: await realpath(root) };
+}
+
+async function realRoots(roots: string[]): Promise<Set<string>> {
+  const values = await Promise.all(
+    roots.map(async (root) => {
+      try {
+        return await realpath(root);
+      } catch {
+        return root;
+      }
+    }),
+  );
+  return new Set(values);
+}
+
+function errorContext(
+  primary: HandlerContext,
+  code: RootTargetError,
+  message: string,
+): HandlerContext {
+  return {
+    ...primary,
+    config: {
+      ...primary.config,
+      roots: [],
+    },
+    stateRef: {
+      state: undefined,
+    },
+    now: primary.now,
+    sessionId: primary.sessionId,
+    error: { code, message },
+  };
 }
 
 async function handleTool(name: string, args: unknown, context: HandlerContext): Promise<unknown> {
+  if (context.error) return { error: context.error };
   const { config } = context;
   switch (name) {
     case "file_search": {

@@ -59,6 +59,8 @@ Config layers are defaults, `~/.config/rp-mini/config.json`, workspace `rp-mini.
 | `ignore.extra` | `[]` | Additional ignore globs. |
 | `ignore.ios_preset` | `auto` | Applies iOS/Xcode ignore behavior when relevant. |
 | `search.ripgrep_path` | unset | Optional explicit `rg` binary path. |
+| `dynamic_roots.enabled` | `true` | Allows each MCP call to target an absolute alternative workspace root. |
+| `dynamic_roots.max` | `4` | Maximum number of dynamic root contexts cached per server process. |
 | `tools.apply_edits` | `true` | Enables the edit tool. |
 | `tools.file_actions` | `true` | Enables create/delete/move tool. |
 | `tools.git` | `true` | Enables read-only git tool. |
@@ -80,6 +82,8 @@ Config layers are defaults, `~/.config/rp-mini/config.json`, workspace `rp-mini.
 Environment variables use the `RP_MINI_` prefix; see `packages/core/src/config/index.ts` for exact names.
 
 ## Tools
+
+Every MCP tool accepts optional `root`, an absolute workspace path that targets that single call without rebinding the server process.
 
 | Tool | Purpose |
 | --- | --- |

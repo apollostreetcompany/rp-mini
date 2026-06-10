@@ -42,6 +42,10 @@ export interface Config {
   search: {
     ripgrep_path?: string;
   };
+  dynamic_roots: {
+    enabled: boolean;
+    max: number;
+  };
   tools: {
     apply_edits: boolean;
     file_actions: boolean;
@@ -116,6 +120,7 @@ export const defaultConfig: Config = {
     ios_preset: "auto",
   },
   search: {},
+  dynamic_roots: { enabled: true, max: 4 },
   tools: { apply_edits: true, file_actions: true, git: true },
   selection: { auto_codemaps: true, persist: true, scope: "session" },
   context_builder: { enhancement: "rewrite", intent_detection: true },
@@ -213,9 +218,11 @@ function envToConfig(env: Record<string, string | undefined>): DeepPartial<Confi
   setNumber(result, ["concurrency", "search_max"], env.RP_MINI_CONCURRENCY_SEARCH_MAX);
   setNumber(result, ["daemon", "idle_timeout_s"], env.RP_MINI_DAEMON_IDLE_TIMEOUT_S);
   setNumber(result, ["daemon", "max_rss_mb"], env.RP_MINI_DAEMON_MAX_RSS_MB);
+  setNumber(result, ["dynamic_roots", "max"], env.RP_MINI_DYNAMIC_ROOTS_MAX);
   setBoolean(result, ["tools", "apply_edits"], env.RP_MINI_TOOLS_APPLY_EDITS);
   setBoolean(result, ["tools", "file_actions"], env.RP_MINI_TOOLS_FILE_ACTIONS);
   setBoolean(result, ["tools", "git"], env.RP_MINI_TOOLS_GIT);
+  setBoolean(result, ["dynamic_roots", "enabled"], env.RP_MINI_DYNAMIC_ROOTS_ENABLED);
   setBoolean(result, ["selection", "auto_codemaps"], env.RP_MINI_SELECTION_AUTO_CODEMAPS);
   setBoolean(result, ["selection", "persist"], env.RP_MINI_SELECTION_PERSIST);
   setBoolean(
