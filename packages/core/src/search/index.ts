@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { relative, sep } from "node:path";
 import { promisify } from "node:util";
@@ -72,6 +72,11 @@ interface RgContextEvent {
     line_number: number;
     lines: { text: string };
   };
+}
+
+interface RgExitError extends Error {
+  code?: number | null;
+  signal?: NodeJS.Signals | null;
 }
 
 const require = createRequire(import.meta.url);
@@ -200,6 +205,7 @@ async function contentSearch(
 ): Promise<SearchMatch[]> {
   const rg = resolveRipgrepBinary(config);
   const matches: SearchMatch[] = [];
+  const byteLimit = Math.max(config.caps.search_chars * 8, 16 * 1024 * 1024);
   for (const root of catalog.roots) {
     const files = root.files
       .filter((file) => !file.isBinary && !file.oversized && !file.likelyGenerated)
@@ -216,52 +222,158 @@ async function contentSearch(
       ...files.map((file) => file.relativePath),
     ];
     try {
-      const { stdout } = await execFileAsync(rg, args, {
-        cwd: root.root,
-        maxBuffer: Math.max(config.caps.search_chars * 4, 1024 * 1024),
-      });
       const pendingBefore = new Map<string, string[]>();
       const lastMatchByPath = new Map<string, SearchMatch>();
-      for (const line of stdout.split(/\r?\n/)) {
-        if (!line) continue;
-        const event = JSON.parse(line) as RgMatchEvent | RgContextEvent | { type: string };
-        if (event.type === "context") {
-          const context = event as RgContextEvent;
-          const path = toPosix(context.data.path.text);
-          const lastMatch = lastMatchByPath.get(path);
-          if (lastMatch?.line !== undefined && context.data.line_number > lastMatch.line) {
-            lastMatch.contextAfter ??= [];
-            lastMatch.contextAfter.push(context.data.lines.text);
-          } else {
-            const before = pendingBefore.get(path) ?? [];
-            before.push(context.data.lines.text);
-            pendingBefore.set(path, before);
-          }
-          continue;
-        }
-        if (event.type !== "match") continue;
-        const match = event as RgMatchEvent;
-        const path = toPosix(match.data.path.text);
-        const submatch = match.data.submatches[0];
-        const searchMatch: SearchMatch = {
-          path,
-          line: match.data.line_number,
-          column: submatch ? submatch.start + 1 : 1,
-          matchText: submatch?.match.text ?? match.data.lines.text.trimEnd(),
-          contextBefore: pendingBefore.get(path),
-          kind: "content",
-        };
-        pendingBefore.delete(path);
-        lastMatchByPath.set(path, searchMatch);
-        matches.push(searchMatch);
-        if (matches.length >= maxResults) return matches;
-      }
+      const stopped = await streamRipgrepJson(rg, args, root.root, {
+        byteLimit,
+        maxResults,
+        matches,
+        pendingBefore,
+        lastMatchByPath,
+      });
+      if (stopped) return matches;
     } catch (error) {
       if (isNoMatches(error)) continue;
       throw error;
     }
   }
   return matches;
+}
+
+async function streamRipgrepJson(
+  rg: string,
+  args: string[],
+  cwd: string,
+  state: {
+    byteLimit: number;
+    maxResults: number;
+    matches: SearchMatch[];
+    pendingBefore: Map<string, string[]>;
+    lastMatchByPath: Map<string, SearchMatch>;
+  },
+): Promise<boolean> {
+  const child = spawn(rg, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+  let processError: Error | undefined;
+  let stderr = "";
+  let stopped = false;
+  let consumedBytes = 0;
+  let buffered = "";
+  const close = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("error", (error) => {
+      processError = error;
+      resolve({ code: null, signal: null });
+    });
+    child.once("close", (code, signal) => resolve({ code, signal }));
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    if (stderr.length < 65536) stderr += chunk.toString("utf8");
+  });
+
+  try {
+    for await (const chunk of child.stdout) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      consumedBytes += buffer.length;
+      buffered += buffer.toString("utf8");
+      let newline = buffered.indexOf("\n");
+      while (newline !== -1) {
+        const rawLine = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+        if (line && processRipgrepLine(line, state)) {
+          stopped = true;
+          terminateChild(child);
+          break;
+        }
+        if (consumedBytes > state.byteLimit) {
+          stopped = true;
+          terminateChild(child);
+          break;
+        }
+        newline = buffered.indexOf("\n");
+      }
+      if (!stopped && consumedBytes > state.byteLimit) {
+        // A single line longer than the byte limit would otherwise buffer without bound.
+        stopped = true;
+        terminateChild(child);
+      }
+      if (stopped) break;
+    }
+    if (!stopped && buffered) {
+      stopped = processRipgrepLine(buffered, state);
+      if (stopped) terminateChild(child);
+    }
+  } catch (error) {
+    if (!stopped) throw error;
+  } finally {
+    if (stopped) terminateChild(child);
+  }
+
+  const { code, signal } = await close;
+  if (processError) throw processError;
+  if (!stopped && code !== 0 && code !== 1) throw rgExitError(code, signal, stderr);
+  return stopped;
+}
+
+function processRipgrepLine(
+  line: string,
+  state: {
+    maxResults: number;
+    matches: SearchMatch[];
+    pendingBefore: Map<string, string[]>;
+    lastMatchByPath: Map<string, SearchMatch>;
+  },
+): boolean {
+  const event = JSON.parse(line) as RgMatchEvent | RgContextEvent | { type: string };
+  if (event.type === "context") {
+    const context = event as RgContextEvent;
+    const path = toPosix(context.data.path.text);
+    const lastMatch = state.lastMatchByPath.get(path);
+    if (lastMatch?.line !== undefined && context.data.line_number > lastMatch.line) {
+      lastMatch.contextAfter ??= [];
+      lastMatch.contextAfter.push(context.data.lines.text);
+    } else {
+      const before = state.pendingBefore.get(path) ?? [];
+      before.push(context.data.lines.text);
+      state.pendingBefore.set(path, before);
+    }
+    return false;
+  }
+  if (event.type !== "match") return false;
+  const match = event as RgMatchEvent;
+  const path = toPosix(match.data.path.text);
+  const submatch = match.data.submatches[0];
+  const searchMatch: SearchMatch = {
+    path,
+    line: match.data.line_number,
+    column: submatch ? submatch.start + 1 : 1,
+    matchText: submatch?.match.text ?? match.data.lines.text.trimEnd(),
+    contextBefore: state.pendingBefore.get(path),
+    kind: "content",
+  };
+  state.pendingBefore.delete(path);
+  state.lastMatchByPath.set(path, searchMatch);
+  state.matches.push(searchMatch);
+  return state.matches.length >= state.maxResults;
+}
+
+function terminateChild(child: ReturnType<typeof spawn>): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+}
+
+function rgExitError(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderr: string,
+): RgExitError {
+  const error = new Error(
+    `ripgrep failed with ${code === null ? `signal ${signal ?? "unknown"}` : `exit code ${code}`}${
+      stderr ? `: ${stderr.trim()}` : ""
+    }`,
+  ) as RgExitError;
+  error.code = code;
+  error.signal = signal;
+  return error;
 }
 
 function shapeSearchResult(
