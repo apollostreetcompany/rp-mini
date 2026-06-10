@@ -29,6 +29,14 @@
 - Generated agent: `packages/cc-plugin/agents/context-builder.md`, rendered from `shared-prompts/discovery/contract.md` via `pnpm build:prompts`.
 - Optional warm hook: `hooks/hooks.json` runs `rp-mini index .` in the background on `SessionStart`; warming is never required for correctness and no tool call waits on it.
 
+## Codex Plugin
+- Plugin root: `packages/codex-plugin`.
+- Install from checkout after build and prompt generation: `bash packages/codex-plugin/install.sh`.
+- Skills install under `~/.codex/skills/rp-mini-*`; source skill directories remain unprefixed under `packages/codex-plugin/skills/`.
+- Generated context-builder skill: `packages/codex-plugin/skills/context-builder/SKILL.md`, rendered from `shared-prompts/discovery/contract.md` via `pnpm build:prompts`.
+- MCP config snippet: `packages/codex-plugin/config/mcp-servers.toml` uses Codex's `[mcp_servers.rp-mini]` shape with `command = "node"` and `args = ["<abs packages/server/dist/cli.js>", "serve"]`.
+- Installer does not edit `~/.codex/config.toml` by default; `--write-config` appends only when `[mcp_servers.rp-mini]` is absent. `--uninstall` removes only `~/.codex/skills/rp-mini-*`.
+
 ## Deployment Status
 - No hosted deployment target yet.
 - No ports are bound by the Bead 1 stdio server path.

@@ -23,6 +23,8 @@ importers:
 
   packages/cc-plugin: {}
 
+  packages/codex-plugin: {}
+
   packages/core:
     dependencies:
       '@vscode/tree-sitter-wasm':
