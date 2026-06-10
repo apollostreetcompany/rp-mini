@@ -7,6 +7,9 @@ description: Deep planning workflow using rp-mini context-builder.
 
 Use this when the user asks for a plan document before implementation.
 
+Check workspace binding first. On mismatch, pass `root=<absolute path>` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use `node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'` or its wrappers.
+
 1. Clarify first: if goals, constraints, target audience, or involvement level are ambiguous, ask with AskUserQuestion before spawning the builder.
 2. Create or update `docs/plans/<topic>-<YYYY-MM-DD>.md` only after the plan scope is clear.
 3. Spawn the `context-builder` subagent with:

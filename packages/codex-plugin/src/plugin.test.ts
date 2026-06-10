@@ -25,6 +25,15 @@ function frontmatter(text: string): Record<string, string> {
 }
 
 describe("Codex plugin package", () => {
+  const rpSkills = [
+    "rp-build",
+    "rp-investigate",
+    "rp-review",
+    "rp-refactor",
+    "rp-plan",
+    "rp-export",
+  ];
+
   it("renders the Codex context-builder skill from the shared discovery contract", () => {
     const contract = readText(contractPath).trim();
     const skill = readText(builderPath);
@@ -46,8 +55,14 @@ describe("Codex plugin package", () => {
 
     for (const phrase of [
       '<taskname="',
+      "Workspace Binding",
+      'root="<absolute path>"',
+      "get_file_tree mode=folders max_depth=1",
       "Degradation ladder",
       "Pre-halt checklist (MANDATORY)",
+      'manage_selection op=save_profile name="handoff-<short-task-slug>"',
+      "manage_selection op=load_profile",
+      "state the profile name and final token total",
       "FINAL GATE",
       "rewrite",
       "augment",
@@ -74,17 +89,19 @@ describe("Codex plugin package", () => {
     expect(availableTools![0]).not.toContain("file_actions");
   });
 
-  it("defines Codex skills that reference the context-builder skill and numbered clarification", () => {
-    const skills = [
-      "rp-build",
-      "rp-investigate",
-      "rp-review",
-      "rp-refactor",
-      "rp-plan",
-      "rp-export",
-    ];
+  it("documents selection-profile handoff and workspace binding in the shared contract", () => {
+    const contract = readText(contractPath);
 
-    for (const skill of skills) {
+    expect(contract).toContain("## Workspace Binding");
+    expect(contract).toContain("get_file_tree mode=folders max_depth=1");
+    expect(contract).toContain('root="<absolute path>"');
+    expect(contract).toContain('manage_selection op=save_profile name="handoff-<short-task-slug>"');
+    expect(contract).toContain("manage_selection op=load_profile");
+    expect(contract).toContain("final token total");
+  });
+
+  it("defines Codex skills that reference the context-builder skill and numbered clarification", () => {
+    for (const skill of rpSkills) {
       const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
       const front = frontmatter(text);
       expect(front.name).toBe(skill);
@@ -93,7 +110,37 @@ describe("Codex plugin package", () => {
       expect(text).toContain("native subagent");
       expect(text).toContain("response_type");
       expect(text).toContain("present numbered options in chat and wait");
-      expect(text.split("\n").length).toBeLessThanOrEqual(70);
+      expect(text.split("\n").length).toBeLessThanOrEqual(90);
+    }
+  });
+
+  it("keeps workspace binding and shell CLI fallback notes in every rp-* skill", () => {
+    for (const skill of rpSkills) {
+      const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
+      expect(text).toContain("Check workspace binding first");
+      expect(text).toContain("root=<absolute path>");
+      expect(text).toContain(
+        "node packages/server/dist/cli.js tool <workspace> <tool> --json-args",
+      );
+    }
+  });
+
+  it("adds investigation triage fast path and export receipts where required", () => {
+    const investigate = readText(join(pluginRoot, "skills/rp-investigate/SKILL.md"));
+    expect(investigate).toContain("Triage fast path");
+    expect(investigate).toContain("Bounded question");
+    expect(investigate).toContain("do not spawn the builder");
+    expect(investigate).toContain("file_search");
+    expect(investigate).toContain("read_file");
+    expect(investigate).toContain("get_code_structure");
+    expect(investigate).toContain("line-cited evidence");
+
+    for (const skill of ["rp-investigate", "rp-review", "rp-export"]) {
+      const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
+      expect(text).toContain("workspace_context op=export");
+      expect(text).toContain("token totals");
+      expect(text).toContain("content hash");
+      expect(text).toContain("saved handoff profile");
     }
   });
 

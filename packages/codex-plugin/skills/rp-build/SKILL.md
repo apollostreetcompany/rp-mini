@@ -7,6 +7,9 @@ description: Build workflow using rp-mini context-builder before implementation.
 
 Use this when the user wants code changes and the task benefits from curated context.
 
+Check workspace binding first. On mismatch, pass `root=<absolute path>` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use `node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'` or its wrappers.
+
 1. Verify the workspace is the intended repo and make a quick scan with rp-mini tools such as `get_file_tree`, `file_search`, or `get_code_structure`.
 2. Clarify first: if task scope, target behavior, or acceptance criteria are ambiguous, present numbered options in chat and wait before launching the builder.
 3. Load `skills/context-builder` (installed as `rp-mini-context-builder`) and run it as a Codex native subagent with:

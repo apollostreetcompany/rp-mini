@@ -7,7 +7,6 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = resolve(scriptDir, "..");
 const repoRoot = resolve(pluginRoot, "../..");
 const contractPath = join(repoRoot, "shared-prompts/discovery/contract.md");
-const serverCliPath = join(repoRoot, "packages/server/dist/cli.js");
 
 const contract = (await readFile(contractPath, "utf8")).trim();
 
@@ -40,6 +39,9 @@ const skillDefinitions = {
 
 Use this when the user wants code changes and the task benefits from curated context.
 
+Check workspace binding first. On mismatch, pass \`root=<absolute path>\` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use \`node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'\` or its wrappers.
+
 1. Verify the workspace is the intended repo and make a quick scan with rp-mini tools such as \`get_file_tree\`, \`file_search\`, or \`get_code_structure\`.
 2. Clarify first: if task scope, target behavior, or acceptance criteria are ambiguous, present numbered options in chat and wait before launching the builder.
 3. Load \`skills/context-builder\` (installed as \`rp-mini-context-builder\`) and run it as a Codex native subagent with:
@@ -60,6 +62,9 @@ Do not skip \`context-builder\` for non-trivial code work; the quick scan is ori
 
 Use this when the user wants a packaged context file for another model, review tool, or proconsult-compatible workflow.
 
+Check workspace binding first. On mismatch, pass \`root=<absolute path>\` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use \`node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'\` or its wrappers.
+
 1. Clarify first: if export purpose, scope, preset, or budget is ambiguous, present numbered options in chat and wait before launching the builder.
 2. Load \`skills/context-builder\` (installed as \`rp-mini-context-builder\`) and run it as a Codex native subagent with:
    - task: curate export-ready context for the requested purpose
@@ -69,7 +74,8 @@ Use this when the user wants a packaged context file for another model, review t
 3. Inspect the resulting selection and token count with \`workspace_context include=["selection","tokens"]\`.
 4. Export with \`workspace_context op=export\`, choosing the matching preset when provided (\`standard\`, \`plan\`, \`review\`, or \`diff-followup\`).
 5. Hand the payload path and receipt path to the user. Mention that the payload is compatible with proconsult-style external model intake.
-6. Report selected scope, token count, preset, assumptions, and any files deliberately excluded.
+6. Cite the \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
+7. Report selected scope, token count, preset, assumptions, and any files deliberately excluded.
 
 Do not paste large exported payloads into chat; provide paths and receipt details.
 `,
@@ -80,6 +86,11 @@ Do not paste large exported payloads into chat; provide paths and receipt detail
 
 Use this for root-cause analysis, code archaeology, or "how/why is this happening?" questions. This workflow is read-only.
 
+Check workspace binding first. On mismatch, pass \`root=<absolute path>\` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use \`node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'\` or its wrappers.
+
+Triage fast path: Bounded question (single subsystem, named symbol, roughly <=5 files) -> answer inline with \`file_search\`, \`read_file\`, and \`get_code_structure\`; do not spawn the builder. Broad, cross-cutting, or durable-context-pack requests -> full builder flow. Both paths keep line-cited evidence.
+
 1. Clarify first: if the symptom, environment, comparison point, or expected behavior is ambiguous, present numbered options in chat and wait before launching the builder.
 2. Record the investigation question, symptoms, hypotheses, and any user-provided evidence.
 3. Load \`skills/context-builder\` (installed as \`rp-mini-context-builder\`) and run it as a Codex native subagent with:
@@ -89,7 +100,8 @@ Use this for root-cause analysis, code archaeology, or "how/why is this happenin
    - enhancement mode: \`rewrite\` unless the user requested \`augment\` or \`preserve\`
 4. Pursue evidence from the handoff: read selected files, inspect git history or diffs when relevant, and verify claims with file:line references.
 5. Refine selection only when evidence shows the builder missed needed context; bias toward adding, not clearing, selection.
-6. Report findings as evidence, inference, unknowns, and next recommended action.
+6. Finish with a \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
+7. Report findings as evidence, inference, unknowns, and next recommended action.
 
 Do not change source files in this workflow.
 `,
@@ -99,6 +111,9 @@ Do not change source files in this workflow.
     body: `# rp-plan
 
 Use this when the user asks for a plan document before implementation.
+
+Check workspace binding first. On mismatch, pass \`root=<absolute path>\` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use \`node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'\` or its wrappers.
 
 1. Clarify first: if goals, constraints, target audience, or involvement level are ambiguous, present numbered options in chat and wait before launching the builder.
 2. Create or update \`docs/plans/<topic>-<YYYY-MM-DD>.md\` only after the plan scope is clear.
@@ -121,6 +136,9 @@ Do not implement code in this workflow.
 
 Use this for safe behavior-preserving improvements to code organization, duplication, or complexity.
 
+Check workspace binding first. On mismatch, pass \`root=<absolute path>\` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use \`node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'\` or its wrappers.
+
 1. Clarify first: if the target area, behavior-preservation boundary, or acceptable risk is ambiguous, present numbered options in chat and wait before launching the builder.
 2. Do a quick scan of the named areas with \`get_file_tree\`, \`file_search\`, or \`get_code_structure\`.
 3. Load \`skills/context-builder\` (installed as \`rp-mini-context-builder\`) and run it as a Codex native subagent with:
@@ -142,6 +160,9 @@ Do not use refactor as a vehicle for unrelated cleanup.
 
 Use this when the user asks for a code review, PR review, diff review, or comparison against another ref.
 
+Check workspace binding first. On mismatch, pass \`root=<absolute path>\` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use \`node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'\` or its wrappers.
+
 1. Survey changes with \`git\` status/log/diff and infer comparison scope.
 2. Clarify first: if the comparison target is ambiguous or missing, present numbered options in chat and wait before launching the builder.
 3. Load \`skills/context-builder\` (installed as \`rp-mini-context-builder\`) and run it as a Codex native subagent with:
@@ -151,7 +172,8 @@ Use this when the user asks for a code review, PR review, diff review, or compar
    - enhancement mode: \`rewrite\` unless the user requested \`augment\` or \`preserve\`
 4. Act on the handoff: review diff context and affected-but-unchanged sources together.
 5. Judge correctness, security, API/contracts, tests, maintainability, and consistency with existing patterns.
-6. Report findings first, ordered by severity, with file:line references and concrete fixes. Keep summary secondary.
+6. Finish with a \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile.
+7. Report findings first, ordered by severity, with file:line references and concrete fixes. Keep summary secondary.
 
 Do not provide review feedback before \`context-builder\` has built review-mode context unless the user explicitly requested a quick/manual review.
 `,
@@ -167,17 +189,14 @@ description: ${description}
 ${body}`;
 }
 
-function tomlString(value) {
-  return JSON.stringify(value);
-}
-
 const toml = `# rp-mini Codex MCP server snippet.
 # Merge into ~/.codex/config.toml or run packages/codex-plugin/install.sh --write-config.
+# {{RP_MINI_SERVER_CLI}} is resolved to an absolute path by install.sh.
 # npx fallback after publishing: npx rp-mini serve
 # Equivalent fallback uses command "npx" with args "rp-mini" and "serve".
 [mcp_servers.rp-mini]
 command = "node"
-args = [${tomlString(serverCliPath)}, "serve"]
+args = ["{{RP_MINI_SERVER_CLI}}", "serve"]
 `;
 
 await mkdir(join(pluginRoot, "skills/context-builder"), { recursive: true });

@@ -7,6 +7,9 @@ description: Scoped refactoring workflow using rp-mini context-builder.
 
 Use this for safe behavior-preserving improvements to code organization, duplication, or complexity.
 
+Check workspace binding first. On mismatch, pass `root=<absolute path>` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use `node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'` or its wrappers.
+
 1. Clarify first: if the target area, behavior-preservation boundary, or acceptable risk is ambiguous, present numbered options in chat and wait before launching the builder.
 2. Do a quick scan of the named areas with `get_file_tree`, `file_search`, or `get_code_structure`.
 3. Load `skills/context-builder` (installed as `rp-mini-context-builder`) and run it as a Codex native subagent with:

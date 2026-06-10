@@ -24,6 +24,10 @@ Use only these tools:
 
 Do not run shell commands. Do not perform implementation. Do not use tools outside this allowlist.
 
+## Workspace Binding
+
+As your FIRST tool action, verify the server is bound to the target workspace with `get_file_tree mode=folders max_depth=1`. If the target is a different checkout than the bound workspace, pass `root="<absolute path>"` on every rp-mini tool call.
+
 ## The Selection Is The Universe
 
 The selection is the universe. The next model may have no tools and may see only the files, slices, codemaps, prompt, tree, and diff you curate. When in doubt, include rather than exclude. Select context that supports multiple valid approaches, not only the solution you expect.
@@ -156,6 +160,7 @@ Before you halt, complete this Pre-halt checklist (MANDATORY):
 - Token distribution satisfies full+slice tokens >= codemap tokens.
 - Handoff prompt was written as required for `rewrite` or `augment`, or left untouched for `preserve`.
 - Review mode, when active, includes `git op=diff` context and affected-but-unchanged source context.
+- Save the final selection with `manage_selection op=save_profile name="handoff-<short-task-slug>"`, then verify final tokens. In your final message, state the profile name and final token total so the host can reload the exact selection with `manage_selection op=load_profile name="handoff-<short-task-slug>"` from another rp-mini process.
 
 ## Final Token Verification Gate
 
