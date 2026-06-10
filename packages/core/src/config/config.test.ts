@@ -69,4 +69,17 @@ describe("loadConfig", () => {
     expect(config.presets["diff-followup"]).toBeDefined();
     expect(config.presets.custom).toEqual({ include_files: false });
   });
+
+  it("loads ignore config defaults and overrides", async () => {
+    const rootDir = await tempRoot();
+    await writeFile(
+      join(rootDir, "rp-mini.config.json"),
+      JSON.stringify({ ignore: { extra: ["vendor/**"], ios_preset: false } }),
+    );
+
+    const config = await loadConfig(rootDir, undefined, { env: {}, homeDir: await tempRoot() });
+
+    expect(defaultConfig.ignore).toEqual({ extra: [], ios_preset: "auto" });
+    expect(config.ignore).toEqual({ extra: ["vendor/**"], ios_preset: false });
+  });
 });

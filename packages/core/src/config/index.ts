@@ -6,6 +6,7 @@ export type TokenizerConfig = "heuristic" | `tiktoken:${string}`;
 export type SelectionScope = "session" | "workspace";
 export type EnhancementMode = "rewrite" | "augment" | "preserve";
 export type PathDisplay = "relative" | "full";
+export type IosIgnorePreset = "auto" | boolean;
 
 export interface PresetConfig {
   include_files?: boolean;
@@ -33,6 +34,10 @@ export interface Config {
   codemaps: {
     languages: string[];
     cache_dir: string;
+  };
+  ignore: {
+    extra: string[];
+    ios_preset: IosIgnorePreset;
   };
   tools: {
     apply_edits: boolean;
@@ -102,6 +107,10 @@ export const defaultConfig: Config = {
       "dart",
     ],
     cache_dir: ".rp-mini/codemap-cache",
+  },
+  ignore: {
+    extra: [],
+    ios_preset: "auto",
   },
   tools: { apply_edits: true, file_actions: true, git: true },
   selection: { auto_codemaps: true, persist: true, scope: "session" },
@@ -212,9 +221,11 @@ function envToConfig(env: Record<string, string | undefined>): DeepPartial<Confi
   setString(result, ["codemaps", "cache_dir"], env.RP_MINI_CODEMAPS_CACHE_DIR);
   setString(result, ["selection", "scope"], env.RP_MINI_SELECTION_SCOPE);
   setString(result, ["context_builder", "enhancement"], env.RP_MINI_CONTEXT_BUILDER_ENHANCEMENT);
+  setString(result, ["ignore", "ios_preset"], env.RP_MINI_IGNORE_IOS_PRESET);
   setString(result, ["paths"], env.RP_MINI_PATHS);
   setStringArray(result, ["roots"], env.RP_MINI_ROOTS);
   setStringArray(result, ["codemaps", "languages"], env.RP_MINI_CODEMAPS_LANGUAGES);
+  setStringArray(result, ["ignore", "extra"], env.RP_MINI_IGNORE_EXTRA);
   setStringArray(result, ["packager", "section_order"], env.RP_MINI_PACKAGER_SECTION_ORDER);
   return result;
 }
