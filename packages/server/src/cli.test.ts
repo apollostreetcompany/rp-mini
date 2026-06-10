@@ -14,6 +14,19 @@ async function tempRoot(): Promise<string> {
 }
 
 describe("rp-mini index CLI", () => {
+  it("prints help with shell wrappers and MCP tool escape hatch", async () => {
+    const result = await execFileAsync("node", [
+      join(process.cwd(), "packages/server/dist/cli.js"),
+      "--help",
+    ]);
+
+    expect(result.stdout).toContain("rp-mini search <root> <pattern>");
+    expect(result.stdout).toContain("rp-mini read <root> <path>");
+    expect(result.stdout).toContain("rp-mini tool <root> <tool-name>");
+    expect(result.stdout).toContain("file_search");
+    expect(result.stdout).toContain("workspace_context");
+  });
+
   it("prints a root summary and writes a catalog snapshot", async () => {
     const root = await tempRoot();
     await writeFile(join(root, "app.ts"), "export const app = 1;\n");
@@ -80,5 +93,90 @@ describe("rp-mini index CLI", () => {
     );
 
     expect(result.stdout).toMatch(/codemaps: 0 cached, 8 computed, 0 skipped\(gated\)/);
+  }, 60_000);
+
+  it("exposes search, read, tree, structure, and generic tool wrappers", async () => {
+    const root = await tempRoot();
+    await writeFile(
+      join(root, "app.ts"),
+      [
+        "export interface AppConfig {",
+        "  name: string;",
+        "}",
+        "",
+        "export function formatApp(config: AppConfig): string {",
+        "  return `app:${config.name}`;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const cli = join(process.cwd(), "packages/server/dist/cli.js");
+    const search = await execFileAsync("node", [cli, "search", root, "formatApp"], { cwd: root });
+    const read = await execFileAsync(
+      "node",
+      [cli, "read", root, "app.ts", "--start-line", "5", "--limit", "2"],
+      { cwd: root },
+    );
+    const tree = await execFileAsync("node", [cli, "tree", root, "--mode", "full"], { cwd: root });
+    const structure = await execFileAsync(
+      "node",
+      [cli, "structure", root, "app.ts", "--max-results", "1"],
+      { cwd: root },
+    );
+    const tool = await execFileAsync(
+      "node",
+      [
+        cli,
+        "tool",
+        root,
+        "file_search",
+        "--json-args",
+        JSON.stringify({ pattern: "AppConfig", mode: "both", max_results: 3 }),
+      ],
+      { cwd: root },
+    );
+
+    expect(search.stdout).toContain("app.ts:5:17: formatApp");
+    expect(read.stdout).toBe(
+      "export function formatApp(config: AppConfig): string {\n  return `app:${config.name}`;\n",
+    );
+    expect(tree.stdout).toContain("app.ts +");
+    expect(structure.stdout).toContain("## app.ts");
+    expect(structure.stdout).toContain("formatApp");
+    const toolResult = JSON.parse(tool.stdout) as { matches: Array<{ path: string }> };
+    expect(toolResult.matches.some((match) => match.path === "app.ts")).toBe(true);
+  }, 60_000);
+
+  it("persists selection and prompt state through shell wrappers", async () => {
+    const root = await tempRoot();
+    await writeFile(join(root, "app.ts"), "export const app = 1;\n");
+
+    const cli = join(process.cwd(), "packages/server/dist/cli.js");
+    const session = crypto.randomUUID();
+    await execFileAsync(
+      "node",
+      [cli, "select", root, "set", "app.ts", "--session", session, "--json"],
+      { cwd: root },
+    );
+    await execFileAsync(
+      "node",
+      [cli, "prompt", root, "set", "Investigate app", "--session", session],
+      { cwd: root },
+    );
+    const context = await execFileAsync(
+      "node",
+      [cli, "context", root, "snapshot", "--session", session, "--include", "selection,tokens"],
+      { cwd: root },
+    );
+
+    const snapshot = JSON.parse(context.stdout) as {
+      selection: { entries: Array<{ path: string }> };
+      total_tokens: number;
+    };
+    expect(snapshot.selection.entries).toEqual([
+      { path: "app.ts", mode: "full", slices: [], auto: false },
+    ]);
+    expect(snapshot.total_tokens).toBeGreaterThan(0);
   }, 60_000);
 });

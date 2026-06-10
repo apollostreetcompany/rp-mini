@@ -9,7 +9,7 @@ Build the server first so the generated TOML points at an existing CLI:
 ```sh
 pnpm build
 pnpm --filter @rp-mini/codex-plugin build:prompts
-bash packages/codex-plugin/install.sh
+packages/codex-plugin/install.sh
 ```
 
 The installer copies skills into `~/.codex/skills/` with `rp-mini-` prefixes:
@@ -25,13 +25,13 @@ The installer copies skills into `~/.codex/skills/` with `rp-mini-` prefixes:
 By default it does not modify `~/.codex/config.toml`; it prints `config/mcp-servers.toml` for manual merge. To append the snippet only when `[mcp_servers.rp-mini]` is absent:
 
 ```sh
-bash packages/codex-plugin/install.sh --write-config
+packages/codex-plugin/install.sh --write-config
 ```
 
 ## Uninstall
 
 ```sh
-bash packages/codex-plugin/install.sh --uninstall
+packages/codex-plugin/install.sh --uninstall
 ```
 
 `--uninstall` removes only `~/.codex/skills/rp-mini-*` directories. It does not edit `~/.codex/config.toml`.
