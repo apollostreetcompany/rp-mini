@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BeadEvidence",
+  "type": "object",
+  "required": [
+    "bead_id",
+    "title",
+    "workstream",
+    "risk_class",
+    "agent_selected",
+    "selection_reason",
+    "commit_sha",
+    "branch",
+    "status",
+    "validations",
+    "timestamp_utc"
+  ],
+  "properties": {
+    "bead_id": { "type": "string" },
+    "title": { "type": "string" },
+    "workstream": {
+      "type": "string",
+      "enum": ["code", "docs", "design", "research", "ops", "deploy", "other"]
+    },
+    "risk_class": { "type": "string", "enum": ["low", "medium", "high"] },
+    "agent_selected": { "type": "string" },
+    "selection_reason": { "type": "string" },
+    "fallback_agent": { "type": "string" },
+    "confidence": { "type": "string", "enum": ["low", "medium", "high"] },
+    "commit_sha": { "type": "string" },
+    "branch": { "type": "string" },
+    "files_touched": { "type": "array", "items": { "type": "string" } },
+    "tests": { "type": "array", "items": { "type": "string" } },
+    "validations": { "type": "array", "items": { "type": "string" } },
+    "status": { "type": "string", "enum": ["approved", "concerns", "failed"] },
+    "notes": { "type": "string" },
+    "timestamp_utc": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

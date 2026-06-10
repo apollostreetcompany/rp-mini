@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.rp-mini/
+.DS_Store
+coverage/
+*.log
+.env
