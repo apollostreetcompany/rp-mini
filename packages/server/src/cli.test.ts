@@ -39,10 +39,10 @@ describe("rp-mini index CLI", () => {
 
     expect(first.stdout).toMatch(
       new RegExp(
-        `${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: 1 files, 0 dirs, \\d+ ignored, took \\d+\\.\\d{3}s`,
+        `${root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: 1 files, 0 dirs, \\d+ ignored, took \\d+\\.\\d{3}s; codemaps: 0 cached, 1 computed, 0 skipped\\(gated\\)`,
       ),
     );
-    expect(second.stdout).toMatch(/1 files, 0 dirs/);
+    expect(second.stdout).toMatch(/codemaps: 1 cached, 0 computed, 0 skipped\(gated\)/);
     const snapshot = JSON.parse(await readFile(join(root, ".rp-mini", "catalog.json"), "utf8")) as {
       roots: Array<{ files: unknown[]; dirs: unknown[] }>;
     };

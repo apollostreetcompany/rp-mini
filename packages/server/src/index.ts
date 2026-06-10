@@ -1,6 +1,7 @@
 import {
   defaultConfig,
   generateFileTree,
+  getCodeStructures,
   getCatalog,
   readFileSlice,
   relativeToRoot,
@@ -267,6 +268,21 @@ async function handleTool(name: string, args: unknown, config: Config): Promise<
         mode: treeArgs.mode,
         maxDepth: treeArgs.max_depth,
         path: treeArgs.path,
+      });
+    }
+    case "get_code_structure": {
+      const structureArgs = args as {
+        paths?: string[];
+        scope?: "selected";
+        max_results?: number;
+      };
+      if (structureArgs.scope === "selected") {
+        return { error: { code: "not_available_until_selection" } };
+      }
+      const catalog = await getCatalog(config.roots, config);
+      return getCodeStructures(catalog, config, {
+        paths: structureArgs.paths ?? [],
+        maxResults: structureArgs.max_results,
       });
     }
     default:

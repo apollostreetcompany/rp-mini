@@ -1,5 +1,6 @@
 import { basename, sep } from "node:path";
 import type { FileCatalog } from "../catalog/index.js";
+import { canCodemapFile } from "../codemaps/index.js";
 import type { Config } from "../config/index.js";
 import { estimateTokens } from "../tokens/index.js";
 
@@ -30,6 +31,7 @@ interface Node {
   kind: "dir" | "file";
   children: Map<string, Node>;
   assetCatalog?: boolean;
+  codemapAvailable?: boolean;
 }
 
 export function generateFileTree(
@@ -45,7 +47,11 @@ export function generateFileTree(
   if (mode === "auto") {
     const maxDepth = maxCatalogDepth(catalog);
     for (let depth = maxDepth; depth >= 0; depth -= 1) {
-      const rendered = renderCatalog(catalog, { ...options, mode: "full", maxDepth: depth });
+      const rendered = renderCatalog(catalog, config, {
+        ...options,
+        mode: "full",
+        maxDepth: depth,
+      });
       if (estimateTokens(rendered.tree) <= config.caps.tree_tokens || depth === 0) {
         const truncated = depth < maxDepth;
         return {
@@ -59,10 +65,14 @@ export function generateFileTree(
     }
   }
 
-  return renderCatalog(catalog, options);
+  return renderCatalog(catalog, config, options);
 }
 
-function renderCatalog(catalog: FileCatalog, options: FileTreeOptions): FileTreeResult {
+function renderCatalog(
+  catalog: FileCatalog,
+  config: Config,
+  options: FileTreeOptions,
+): FileTreeResult {
   const maxDepth = options.maxDepth;
   const rootLines = catalog.roots.flatMap((root) => {
     const basePath = normalize(options.path ?? "");
@@ -79,14 +89,20 @@ function renderCatalog(catalog: FileCatalog, options: FileTreeOptions): FileTree
     if (options.mode !== "folders") {
       for (const file of root.files) {
         if (!insideBase(file.relativePath, basePath)) continue;
-        addPath(tree, stripBase(file.relativePath, basePath), "file");
+        addPath(
+          tree,
+          stripBase(file.relativePath, basePath),
+          "file",
+          false,
+          canCodemapFile(file, config),
+        );
       }
     }
     if (basePath) tree.name = basePath.split("/").at(-1) ?? tree.name;
     return renderNode(tree, "", true, 0, maxDepth);
   });
   return {
-    tree: `${rootLines.join("\n")}\n`,
+    tree: `(+ denotes codemap available)\n${rootLines.join("\n")}\n`,
     limit_hit: false,
     omitted_total: 0,
     wasTruncated: false,
@@ -97,7 +113,13 @@ function buildRoot(path: string, name: string): Node {
   return { name, path, kind: "dir", children: new Map() };
 }
 
-function addPath(root: Node, path: string, kind: "dir" | "file", assetCatalog = false): void {
+function addPath(
+  root: Node,
+  path: string,
+  kind: "dir" | "file",
+  assetCatalog = false,
+  codemapAvailable = false,
+): void {
   const parts = normalize(path).split("/").filter(Boolean);
   if (parts.length === 0) return;
   let cursor = root;
@@ -117,6 +139,7 @@ function addPath(root: Node, path: string, kind: "dir" | "file", assetCatalog = 
     if (isLeaf) {
       child.kind = childKind;
       child.assetCatalog ||= assetCatalog;
+      child.codemapAvailable ||= codemapAvailable;
     }
     cursor = child;
   }
@@ -129,7 +152,7 @@ function renderNode(
   depth: number,
   maxDepth: number | undefined,
 ): string[] {
-  const label = `${node.name}${node.assetCatalog ? " (asset catalog)" : ""}`;
+  const label = `${node.name}${node.assetCatalog ? " (asset catalog)" : ""}${node.codemapAvailable ? " +" : ""}`;
   const line = depth === 0 ? label : `${prefix}${isLast ? "└── " : "├── "}${label}`;
   if (maxDepth !== undefined && depth >= maxDepth) return [line];
   const children = [...node.children.values()].sort(

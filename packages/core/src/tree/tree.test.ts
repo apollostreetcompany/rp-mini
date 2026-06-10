@@ -76,4 +76,19 @@ describe("generateFileTree", () => {
     expect(auto.chosenDepth).toBeDefined();
     expect(estimateTokens(auto.tree)).toBeLessThanOrEqual(config.caps.tree_tokens);
   });
+
+  it("marks codemap-capable files with + and includes a legend", async () => {
+    const root = await tempRoot("codemap-markers");
+    await write(join(root, "src", "a.ts"), "export class A {}\n");
+    await write(join(root, "src", "a.min.js"), "const x=1;".repeat(500));
+    await write(join(root, "README.md"), "# docs\n");
+    const catalog = await buildCatalog([root], withConfig());
+
+    const tree = expectTree(generateFileTree(catalog, withConfig(), { mode: "full" }));
+
+    expect(tree.tree).toContain("(+ denotes codemap available)");
+    expect(tree.tree).toContain("a.ts +");
+    expect(tree.tree).not.toContain("README.md +");
+    expect(tree.tree).not.toContain("a.min.js +");
+  });
 });
