@@ -1,0 +1,14 @@
+{
+  "name": "@rp-mini/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./config": "./dist/config/index.js",
+    "./tokens": "./dist/tokens/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  }
+}
