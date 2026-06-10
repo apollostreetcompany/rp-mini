@@ -15,6 +15,12 @@ USAGE
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_SRC="${SCRIPT_DIR}/skills"
 CONFIG_SNIPPET="${SCRIPT_DIR}/config/mcp-servers.toml"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+SERVER_CLI="${REPO_ROOT}/packages/server/dist/cli.js"
+
+render_snippet() {
+  sed "s|{{RP_MINI_SERVER_CLI}}|${SERVER_CLI}|g" "${CONFIG_SNIPPET}"
+}
 CODEX_HOME="${CODEX_HOME:-${HOME}/.codex}"
 SKILLS_DEST="${CODEX_HOME}/skills"
 CONFIG_FILE="${CODEX_HOME}/config.toml"
@@ -73,7 +79,7 @@ write_config() {
   fi
   {
     printf '\n'
-    cat "${CONFIG_SNIPPET}"
+    render_snippet
   } >>"${CONFIG_FILE}"
   echo "Appended [mcp_servers.rp-mini] to ${CONFIG_FILE}."
 }
@@ -95,7 +101,7 @@ Installed rp-mini Codex skills into ${SKILLS_DEST} with rp-mini-* prefixes.
 
 Merge this snippet into ${CONFIG_FILE}:
 
-$(cat "${CONFIG_SNIPPET}")
+$(render_snippet)
 
 To append it automatically when absent, rerun:
   ${SCRIPT_DIR}/install.sh --write-config

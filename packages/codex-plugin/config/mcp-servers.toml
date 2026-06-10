@@ -1,7 +1,8 @@
 # rp-mini Codex MCP server snippet.
 # Merge into ~/.codex/config.toml or run packages/codex-plugin/install.sh --write-config.
+# {{RP_MINI_SERVER_CLI}} is resolved to an absolute path by install.sh.
 # npx fallback after publishing: npx rp-mini serve
 # Equivalent fallback uses command "npx" with args "rp-mini" and "serve".
 [mcp_servers.rp-mini]
 command = "node"
-args = ["/Users/kikimac/Documents/repoprompt-ce-refactor/rp-mini/packages/server/dist/cli.js", "serve"]
+args = ["{{RP_MINI_SERVER_CLI}}", "serve"]

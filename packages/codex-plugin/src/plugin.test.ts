@@ -102,12 +102,9 @@ describe("Codex plugin package", () => {
 
     expect(toml).toContain("[mcp_servers.rp-mini]");
     expect(toml).toContain('command = "node"');
-    expect(toml).toMatch(/args = \["[^"]+packages\/server\/dist\/cli\.js", "serve"\]/);
+    expect(toml).toContain('args = ["{{RP_MINI_SERVER_CLI}}", "serve"]');
     expect(toml).toContain("npx rp-mini serve");
-
-    const cliPath = toml.match(/args = \["([^"]+)", "serve"\]/)?.[1];
-    expect(cliPath, "CLI path in TOML").toBeTruthy();
-    expect(existsSync(cliPath!), cliPath).toBe(true);
+    expect(existsSync(join(repoRoot, "packages/server/dist/cli.js"))).toBe(true);
   });
 
   it("passes bash syntax checks and installs/uninstalls idempotently in sandboxed HOME", () => {
@@ -125,6 +122,10 @@ describe("Codex plugin package", () => {
       });
 
       expect(first).toContain("[mcp_servers.rp-mini]");
+      expect(first).not.toContain("{{RP_MINI_SERVER_CLI}}");
+      const rendered = first.match(/args = \["([^"]+)", "serve"\]/)?.[1];
+      expect(rendered, "rendered CLI path").toBeTruthy();
+      expect(existsSync(rendered!), rendered).toBe(true);
       expect(second).toBe(first);
 
       for (const skill of [
