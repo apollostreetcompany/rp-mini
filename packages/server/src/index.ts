@@ -7,17 +7,26 @@ import {
   relativeToRoot,
   resolveRootPath,
   searchFiles,
+  SelectionState,
   type CatalogFile,
   type Config,
   type DeepPartial,
   type FileCatalog,
+  type SelectionMode,
+  type SelectionSlice,
+  type SelectionSnapshot,
 } from "@rp-mini/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
 
 export interface RpMiniServerOptions {
   config?: DeepPartial<Config>;
   roots?: string[];
+  sessionId?: string;
+  now?: () => Date;
 }
 
 type ToolDefinition = {
@@ -99,9 +108,22 @@ const toolDefinitions: ToolDefinition[] = [
       "Manage context selection: get/add/remove/set/clear/promote/demote with full, slices, or codemap_only modes.",
     inputSchema: z
       .object({
-        op: z.enum(["get", "add", "remove", "set", "clear", "promote", "demote"]),
+        op: z.enum([
+          "get",
+          "add",
+          "remove",
+          "set",
+          "clear",
+          "promote",
+          "demote",
+          "save_profile",
+          "load_profile",
+          "list_profiles",
+        ]),
         mode: z.enum(["full", "slices", "codemap_only"]).optional(),
         paths: z.array(z.string().min(1)).optional(),
+        name: z.string().min(1).optional(),
+        strict: z.boolean().default(false),
         slices: z
           .array(
             z
@@ -225,6 +247,8 @@ const toolDefinitions: ToolDefinition[] = [
 
 export function createRpMiniServer(options: RpMiniServerOptions = {}): McpServer {
   const config = mergeConfig(defaultConfig, options.config ?? {}, options.roots);
+  const stateRef: { state?: SelectionState } = {};
+  const now = options.now ?? (() => new Date());
   const server = new McpServer({ name: "rp-mini", version: "0.0.0" });
 
   for (const definition of toolDefinitions) {
@@ -235,14 +259,30 @@ export function createRpMiniServer(options: RpMiniServerOptions = {}): McpServer
         description: definition.description,
         inputSchema: definition.inputSchema,
       },
-      async (args) => toolResponse(await handleTool(definition.name, args, config)),
+      async (args) =>
+        toolResponse(
+          await handleTool(definition.name, args, {
+            config,
+            stateRef,
+            sessionId: options.sessionId,
+            now,
+          }),
+        ),
     );
   }
 
   return server;
 }
 
-async function handleTool(name: string, args: unknown, config: Config): Promise<unknown> {
+interface HandlerContext {
+  config: Config;
+  stateRef: { state?: SelectionState };
+  sessionId?: string;
+  now: () => Date;
+}
+
+async function handleTool(name: string, args: unknown, context: HandlerContext): Promise<unknown> {
+  const { config } = context;
   switch (name) {
     case "file_search": {
       const catalog = await getCatalog(config.roots, config);
@@ -268,6 +308,9 @@ async function handleTool(name: string, args: unknown, config: Config): Promise<
         mode: treeArgs.mode,
         maxDepth: treeArgs.max_depth,
         path: treeArgs.path,
+        ...(treeArgs.mode === "selected"
+          ? selectedTreeOptions(await selectionState(context, catalog))
+          : {}),
       });
     }
     case "get_code_structure": {
@@ -276,18 +319,340 @@ async function handleTool(name: string, args: unknown, config: Config): Promise<
         scope?: "selected";
         max_results?: number;
       };
-      if (structureArgs.scope === "selected") {
-        return { error: { code: "not_available_until_selection" } };
-      }
       const catalog = await getCatalog(config.roots, config);
+      if (structureArgs.scope === "selected") {
+        const state = await selectionState(context, catalog);
+        await state.validateFresh();
+        const snapshot = state.snapshot();
+        if (snapshot.entries.length === 0) {
+          return { error: { code: "not_available_until_selection" } };
+        }
+        const paths = selectedStructurePaths(snapshot);
+        return getCodeStructures(catalog, config, {
+          paths,
+          maxResults: structureArgs.max_results,
+        });
+      }
       return getCodeStructures(catalog, config, {
         paths: structureArgs.paths ?? [],
         maxResults: structureArgs.max_results,
       });
     }
+    case "manage_selection": {
+      const catalog = await getCatalog(config.roots, config);
+      const state = await selectionState(context, catalog);
+      return handleManageSelection(state, args);
+    }
+    case "workspace_context": {
+      const catalog = await getCatalog(config.roots, config);
+      const state = await selectionState(context, catalog);
+      return workspaceContext(state, catalog, config, args, context.now);
+    }
+    case "prompt": {
+      const catalog = await getCatalog(config.roots, config);
+      const state = await selectionState(context, catalog);
+      return handlePrompt(state, args);
+    }
     default:
       return { status: "not_implemented", tool: name, parsed_args: args };
   }
+}
+
+async function selectionState(
+  context: HandlerContext,
+  catalog: FileCatalog,
+): Promise<SelectionState> {
+  if (!context.stateRef.state) {
+    context.stateRef.state = new SelectionState({
+      root: context.config.roots[0] ?? process.cwd(),
+      config: context.config,
+      catalog,
+      sessionId: context.sessionId,
+    });
+    await context.stateRef.state.load();
+  } else {
+    context.stateRef.state.updateCatalog(catalog);
+  }
+  return context.stateRef.state;
+}
+
+async function handleManageSelection(state: SelectionState, args: unknown): Promise<unknown> {
+  const selectionArgs = args as {
+    op: string;
+    mode?: "full" | "slices" | "codemap_only";
+    paths?: string[];
+    slices?: Array<{
+      path: string;
+      ranges?: Array<{ start_line: number; end_line?: number; description?: string }>;
+      description?: string;
+    }>;
+    view?: "summary" | "files" | "content" | "codemaps";
+    name?: string;
+    strict?: boolean;
+  };
+  const mutations = selectionMutations(selectionArgs);
+  const missing = mutations.filter((mutation) => !state.getFile(mutation.path)).map((m) => m.path);
+  if (selectionArgs.strict && missing.length > 0) {
+    return { error: { code: "not_found", paths: missing } };
+  }
+
+  switch (selectionArgs.op) {
+    case "add":
+      await state.add(mutations);
+      break;
+    case "set":
+      await state.set(mutations);
+      break;
+    case "remove":
+      await state.remove(mutations);
+      break;
+    case "clear":
+      await state.clear();
+      break;
+    case "promote":
+      await state.promote(selectionArgs.paths ?? []);
+      break;
+    case "demote":
+      await state.demote(selectionArgs.paths ?? []);
+      break;
+    case "save_profile":
+      if (!selectionArgs.name)
+        return { error: { code: "invalid_request", message: "name is required." } };
+      await state.saveProfile(selectionArgs.name);
+      break;
+    case "load_profile":
+      if (!selectionArgs.name)
+        return { error: { code: "invalid_request", message: "name is required." } };
+      await state.loadProfile(selectionArgs.name);
+      break;
+    case "list_profiles":
+      return { profiles: await state.listProfiles() };
+  }
+  await state.validateFresh();
+  return renderSelectionView(state, selectionArgs.view ?? "summary");
+}
+
+function selectionMutations(args: {
+  mode?: "full" | "slices" | "codemap_only";
+  paths?: string[];
+  slices?: Array<{
+    path: string;
+    ranges?: Array<{ start_line: number; end_line?: number; description?: string }>;
+    description?: string;
+  }>;
+}): Array<{ path: string; mode: SelectionMode; slices?: SelectionSlice[] }> {
+  const mode = fromWireMode(args.mode);
+  const pathMutations = (args.paths ?? []).map((path) => ({ path, mode }));
+  const sliceMutations = (args.slices ?? []).map((slice) => ({
+    path: slice.path,
+    mode: "slices" as const,
+    slices: (slice.ranges ?? []).map((range) => ({
+      start: range.start_line,
+      end: range.end_line ?? range.start_line,
+      description: range.description ?? slice.description,
+    })),
+  }));
+  return [...pathMutations, ...sliceMutations];
+}
+
+function fromWireMode(mode: "full" | "slices" | "codemap_only" | undefined): SelectionMode {
+  if (mode === "codemap_only") return "codemap";
+  return mode ?? "full";
+}
+
+async function renderSelectionView(
+  state: SelectionState,
+  view: "summary" | "files" | "content" | "codemaps",
+): Promise<unknown> {
+  const snapshot = state.snapshot();
+  if (view === "summary") {
+    return { summary: snapshot.totals, auto_codemap_paths: snapshot.autoCodemapPaths };
+  }
+  if (view === "files") {
+    return {
+      files: snapshot.entries.map((entry) => ({
+        path: entry.path,
+        mode: entry.mode,
+        slices: entry.slices,
+        tokens: entry.tokens,
+        auto: snapshot.autoCodemapPaths.includes(entry.path),
+        ...(entry.slices_invalidated ? { slices_invalidated: true } : {}),
+      })),
+      totals: snapshot.totals,
+    };
+  }
+  if (view === "codemaps") {
+    return { codemaps: await codemapBlocks(state, snapshot), totals: snapshot.totals };
+  }
+  return { content: await contentBlocks(state, snapshot), totals: snapshot.totals };
+}
+
+async function handlePrompt(state: SelectionState, args: unknown): Promise<unknown> {
+  const promptArgs = args as { op: "get" | "set" | "append" | "clear"; text?: string };
+  if (promptArgs.op === "set") await state.setPrompt(promptArgs.text ?? "");
+  if (promptArgs.op === "append") await state.appendPrompt(promptArgs.text ?? "");
+  if (promptArgs.op === "clear") await state.clearPrompt();
+  return state.getPrompt();
+}
+
+async function workspaceContext(
+  state: SelectionState,
+  catalog: FileCatalog,
+  config: Config,
+  args: unknown,
+  now: () => Date,
+): Promise<unknown> {
+  await state.validateFresh();
+  const contextArgs = args as {
+    op?: "snapshot" | "export";
+    include?: Array<"prompt" | "selection" | "code" | "files" | "tree" | "tokens">;
+  };
+  const include = contextArgs.include ?? ["prompt", "selection", "code", "files", "tree", "tokens"];
+  const snapshot = state.snapshot();
+  const sections: Record<string, string> = {};
+  if (include.includes("prompt")) sections.prompt = snapshot.prompt;
+  if (include.includes("selection"))
+    sections.selection = JSON.stringify(selectionJson(snapshot), null, 2);
+  if (include.includes("tree")) {
+    const tree = generateFileTree(catalog, config, {
+      mode: "selected",
+      ...selectedTreeOptions(state),
+    });
+    sections.tree = "tree" in tree ? tree.tree : "";
+  }
+  if (include.includes("files")) sections.files = await contentBlocks(state, snapshot);
+  if (include.includes("code")) sections.code = (await codemapBlocks(state, snapshot)).join("\n");
+  const tokenBreakdown = {
+    prompt: snapshot.totals.prompt,
+    instructions: 0,
+    file_tree: sections.tree ? estimateSection(sections.tree) : 0,
+    files_full: snapshot.entries
+      .filter((entry) => entry.mode === "full")
+      .reduce((sum, entry) => sum + entry.tokens.full, 0),
+    files_slices: snapshot.entries
+      .filter((entry) => entry.mode === "slices")
+      .reduce((sum, entry) => sum + entry.tokens.slicesTotal, 0),
+    codemaps: snapshot.entries
+      .filter((entry) => entry.mode === "codemap")
+      .reduce((sum, entry) => sum + entry.tokens.codemap, 0),
+    total: 0,
+  };
+  tokenBreakdown.total =
+    tokenBreakdown.prompt +
+    tokenBreakdown.instructions +
+    tokenBreakdown.file_tree +
+    tokenBreakdown.files_full +
+    tokenBreakdown.files_slices +
+    tokenBreakdown.codemaps;
+  if (include.includes("tokens")) sections.tokens = JSON.stringify(tokenBreakdown, null, 2);
+  const payload = assembleSections(sections);
+  const contentHash = sha256(payload);
+  const response: Record<string, unknown> = {
+    content_hash: contentHash,
+    sections,
+    tokens: tokenBreakdown,
+    selection: selectionJson(snapshot),
+  };
+  if ((contextArgs.op ?? "snapshot") === "export") {
+    const path = join(
+      config.roots[0] ?? process.cwd(),
+      ".rp-mini",
+      "exports",
+      `${timestamp(now())}-${contentHash.slice(0, 8)}.md`,
+    );
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, payload, "utf8");
+    response.path = path;
+  }
+  return response;
+}
+
+function selectedTreeOptions(state: SelectionState) {
+  const snapshot = state.snapshot();
+  return {
+    selectedPaths: snapshot.entries
+      .filter((entry) => !snapshot.autoCodemapPaths.includes(entry.path))
+      .map((entry) => entry.path),
+    codemapPaths: snapshot.entries
+      .filter((entry) => entry.mode === "codemap" || snapshot.autoCodemapPaths.includes(entry.path))
+      .map((entry) => entry.path),
+  };
+}
+
+function selectedStructurePaths(snapshot: SelectionSnapshot): string[] {
+  return snapshot.entries
+    .filter((entry) => entry.mode === "codemap" || entry.mode === "full" || entry.mode === "slices")
+    .map((entry) => entry.path)
+    .sort();
+}
+
+async function contentBlocks(state: SelectionState, snapshot: SelectionSnapshot): Promise<string> {
+  const blocks: string[] = [];
+  for (const entry of snapshot.entries
+    .filter((item) => item.mode !== "codemap")
+    .sort((a, b) => a.path.localeCompare(b.path))) {
+    const file = state.getFile(entry.path);
+    if (!file) continue;
+    const content = await readFile(file.absolutePath, "utf8");
+    const language = entry.path.split(".").at(-1) ?? "";
+    if (entry.mode === "full") {
+      blocks.push(`### ${entry.path}\n\`\`\`${language}\n${content}\`\`\``);
+    } else {
+      const lines = content.split(/(?<=\n)/);
+      const segments = entry.slices.map((slice) => {
+        const label = `(lines ${slice.start}-${slice.end}${slice.description ? `: ${slice.description}` : ""})`;
+        return `${label}\n\`\`\`${language}\n${lines.slice(slice.start - 1, slice.end).join("")}\`\`\``;
+      });
+      blocks.push(`### ${entry.path}\n${segments.join("\n")}`);
+    }
+  }
+  return blocks.join("\n\n");
+}
+
+async function codemapBlocks(
+  state: SelectionState,
+  snapshot: SelectionSnapshot,
+): Promise<string[]> {
+  const blocks: string[] = [];
+  for (const entry of snapshot.entries
+    .filter((item) => item.mode === "codemap")
+    .sort((a, b) => a.path.localeCompare(b.path))) {
+    const text = await state.codemapTextFor(entry.path);
+    if (text) blocks.push(text);
+  }
+  return blocks;
+}
+
+function selectionJson(snapshot: SelectionSnapshot) {
+  return {
+    entries: snapshot.entries.map((entry) => ({
+      path: entry.path,
+      mode: entry.mode,
+      slices: entry.slices,
+      auto: snapshot.autoCodemapPaths.includes(entry.path),
+      ...(entry.slices_invalidated ? { slices_invalidated: true } : {}),
+    })),
+    totals: snapshot.totals,
+  };
+}
+
+function assembleSections(sections: Record<string, string>): string {
+  return Object.keys(sections)
+    .sort()
+    .map((name) => `## ${name}\n\n${sections[name] ?? ""}`.trimEnd())
+    .join("\n\n");
+}
+
+function estimateSection(text: string): number {
+  return Math.ceil((Buffer.byteLength(text, "utf8") / 4) * 1.05);
+}
+
+function timestamp(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, "-");
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 function toolResponse(payload: unknown) {
