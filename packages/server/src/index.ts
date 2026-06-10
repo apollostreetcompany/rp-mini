@@ -1,5 +1,7 @@
 import {
   defaultConfig,
+  assemblePayload,
+  buildReceipt,
   generateFileTree,
   getCodeStructures,
   getCatalog,
@@ -17,9 +19,8 @@ import {
   type SelectionSnapshot,
 } from "@rp-mini/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 
 export interface RpMiniServerOptions {
@@ -158,6 +159,8 @@ const toolDefinitions: ToolDefinition[] = [
           .array(z.enum(["prompt", "selection", "code", "files", "tree", "tokens"]))
           .optional(),
         preset: z.string().min(1).optional(),
+        response_type: z.string().min(1).optional(),
+        git_diff_text: z.string().optional(),
       })
       .strict(),
   },
@@ -506,63 +509,52 @@ async function workspaceContext(
   const contextArgs = args as {
     op?: "snapshot" | "export";
     include?: Array<"prompt" | "selection" | "code" | "files" | "tree" | "tokens">;
+    preset?: string;
+    response_type?: string;
+    git_diff_text?: string;
   };
-  const include = contextArgs.include ?? ["prompt", "selection", "code", "files", "tree", "tokens"];
   const snapshot = state.snapshot();
-  const sections: Record<string, string> = {};
-  if (include.includes("prompt")) sections.prompt = snapshot.prompt;
-  if (include.includes("selection"))
-    sections.selection = JSON.stringify(selectionJson(snapshot), null, 2);
-  if (include.includes("tree")) {
-    const tree = generateFileTree(catalog, config, {
-      mode: "selected",
-      ...selectedTreeOptions(state),
-    });
-    sections.tree = "tree" in tree ? tree.tree : "";
-  }
-  if (include.includes("files")) sections.files = await contentBlocks(state, snapshot);
-  if (include.includes("code")) sections.code = (await codemapBlocks(state, snapshot)).join("\n");
-  const tokenBreakdown = {
-    prompt: snapshot.totals.prompt,
-    instructions: 0,
-    file_tree: sections.tree ? estimateSection(sections.tree) : 0,
-    files_full: snapshot.entries
-      .filter((entry) => entry.mode === "full")
-      .reduce((sum, entry) => sum + entry.tokens.full, 0),
-    files_slices: snapshot.entries
-      .filter((entry) => entry.mode === "slices")
-      .reduce((sum, entry) => sum + entry.tokens.slicesTotal, 0),
-    codemaps: snapshot.entries
-      .filter((entry) => entry.mode === "codemap")
-      .reduce((sum, entry) => sum + entry.tokens.codemap, 0),
-    total: 0,
-  };
-  tokenBreakdown.total =
-    tokenBreakdown.prompt +
-    tokenBreakdown.instructions +
-    tokenBreakdown.file_tree +
-    tokenBreakdown.files_full +
-    tokenBreakdown.files_slices +
-    tokenBreakdown.codemaps;
-  if (include.includes("tokens")) sections.tokens = JSON.stringify(tokenBreakdown, null, 2);
-  const payload = assembleSections(sections);
-  const contentHash = sha256(payload);
+  const payload = await assemblePayload(snapshot, config, {
+    root: config.roots[0] ?? process.cwd(),
+    catalog,
+    preset: contextArgs.preset,
+    responseType: contextArgs.response_type,
+    gitDiffText: contextArgs.git_diff_text,
+    now,
+  });
   const response: Record<string, unknown> = {
-    content_hash: contentHash,
-    sections,
-    tokens: tokenBreakdown,
+    content_hash: payload.contentHash,
+    sections: Object.fromEntries(payload.sections.map((section) => [section.name, section.text])),
+    tokens: payload.tokenBreakdown,
+    total_tokens: payload.tokenBreakdown.total,
+    preset: payload.preset,
     selection: selectionJson(snapshot),
   };
   if ((contextArgs.op ?? "snapshot") === "export") {
-    const path = join(
+    const base = join(
       config.roots[0] ?? process.cwd(),
       ".rp-mini",
       "exports",
-      `${timestamp(now())}-${contentHash.slice(0, 8)}.md`,
+      `${timestamp(now())}-${payload.contentHash.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`,
     );
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, payload, "utf8");
-    response.path = path;
+    const payloadPath = `${base}.md`;
+    const receiptPath = `${base}.json`;
+    await mkdir(dirname(payloadPath), { recursive: true });
+    await writeFile(payloadPath, payload.text, "utf8");
+    await writeFile(
+      receiptPath,
+      `${JSON.stringify(
+        await buildReceipt(snapshot, payload, config, {
+          root: config.roots[0] ?? process.cwd(),
+          now,
+        }),
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    response.payload_path = payloadPath;
+    response.receipt_path = receiptPath;
   }
   return response;
 }
@@ -636,23 +628,8 @@ function selectionJson(snapshot: SelectionSnapshot) {
   };
 }
 
-function assembleSections(sections: Record<string, string>): string {
-  return Object.keys(sections)
-    .sort()
-    .map((name) => `## ${name}\n\n${sections[name] ?? ""}`.trimEnd())
-    .join("\n\n");
-}
-
-function estimateSection(text: string): number {
-  return Math.ceil((Buffer.byteLength(text, "utf8") / 4) * 1.05);
-}
-
 function timestamp(date: Date): string {
   return date.toISOString().replace(/[:.]/g, "-");
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function toolResponse(payload: unknown) {

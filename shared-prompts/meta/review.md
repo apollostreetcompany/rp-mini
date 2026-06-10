@@ -1,0 +1,1 @@
+Review the provided diff and context as a code reviewer. Lead with severity-ranked findings grounded in files and behavior, then note test gaps, security concerns, and residual risks. Keep summaries brief and secondary to issues.

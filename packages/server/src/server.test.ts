@@ -234,7 +234,7 @@ describe("rp-mini MCP server", () => {
     };
     const secondPayload = JSON.parse(firstText(secondSnapshot)) as { content_hash: string };
     expect(firstPayload.content_hash).toBe(secondPayload.content_hash);
-    expect(firstPayload.sections.prompt).toContain("handoff text");
+    expect(firstPayload.sections.user_instructions).toContain("handoff text");
     expect(firstPayload.tokens.total).toBeGreaterThan(0);
 
     await client.callTool({
@@ -255,9 +255,83 @@ describe("rp-mini MCP server", () => {
       name: "workspace_context",
       arguments: { op: "export", include: ["prompt", "tokens"] },
     });
-    const exportPayload = JSON.parse(firstText(exported)) as { path: string };
-    expect(exportPayload.path).toMatch(/\.rp-mini\/exports\/2026-06-10T00-00-00-000Z-/);
-    expect(await readFile(exportPayload.path, "utf8")).toContain("handoff text");
+    const exportPayload = JSON.parse(firstText(exported)) as {
+      payload_path: string;
+      receipt_path: string;
+      content_hash: string;
+    };
+    expect(exportPayload.payload_path).toMatch(/\.rp-mini\/exports\/2026-06-10T00-00-00-000Z-/);
+    expect(exportPayload.receipt_path).toBe(exportPayload.payload_path.replace(/\.md$/, ".json"));
+    expect(await readFile(exportPayload.payload_path, "utf8")).toContain("handoff text");
+    expect(JSON.parse(await readFile(exportPayload.receipt_path, "utf8"))).toMatchObject({
+      schema: "rp-mini-receipt@1",
+      content_hash: exportPayload.content_hash,
+    });
+  });
+
+  it("exports packaged context and receipt with preset and response_type", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "entry.ts"), "export function entry() { return 1; }\n");
+    await write(join(root, "src", "route.ts"), "export const route = '/mvp';\n");
+    const { client } = await connectedClient({
+      roots: [root],
+      sessionId: "packager-export",
+      now: () => new Date("2026-06-10T00:00:00.000Z"),
+    });
+
+    await client.callTool({
+      name: "manage_selection",
+      arguments: {
+        op: "set",
+        mode: "full",
+        paths: ["src/route.ts", "src/entry.ts"],
+      },
+    });
+    await client.callTool({
+      name: "prompt",
+      arguments: { op: "set", text: "Build the MVP route." },
+    });
+
+    const first = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "export", preset: "plan" },
+    });
+    const second = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "export", response_type: "plan" },
+    });
+    const firstPayload = JSON.parse(firstText(first)) as {
+      payload_path: string;
+      receipt_path: string;
+      content_hash: string;
+      total_tokens: number;
+      preset: string;
+    };
+    const secondPayload = JSON.parse(firstText(second)) as {
+      payload_path: string;
+      content_hash: string;
+    };
+
+    expect(firstPayload.preset).toBe("plan");
+    expect(firstPayload.total_tokens).toBeGreaterThan(0);
+    expect(firstPayload.content_hash).toBe(secondPayload.content_hash);
+    expect(firstPayload.payload_path).not.toBe(secondPayload.payload_path);
+    const payloadText = await readFile(firstPayload.payload_path, "utf8");
+    const receipt = JSON.parse(await readFile(firstPayload.receipt_path, "utf8")) as {
+      files: Array<{ path: string; mode: string; tokens: number }>;
+      preset: string;
+      content_hash: string;
+    };
+    expect(payloadText).toContain("<file_map>");
+    expect(payloadText).toContain("<file_contents>");
+    expect(payloadText).toContain('<meta prompt 1 = "Architect">');
+    expect(payloadText).toContain("<user_instructions>");
+    expect(receipt).toMatchObject({
+      preset: "plan",
+      content_hash: firstPayload.content_hash,
+    });
+    expect(receipt.files.map((file) => file.path)).toEqual(["src/entry.ts", "src/route.ts"]);
+    expect(receipt.files.every((file) => file.tokens > 0)).toBe(true);
   });
 
   it("drops stale slices after selected file content changes", async () => {

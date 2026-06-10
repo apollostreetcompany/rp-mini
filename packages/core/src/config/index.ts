@@ -152,6 +152,14 @@ export const defaultConfig: Config = {
       git_inclusion: "diff",
       meta_prompts: [],
     },
+    mvp: {
+      include_files: true,
+      include_tree: true,
+      tree_mode: "selected",
+      codemap_usage: "auto",
+      git_inclusion: "none",
+      meta_prompts: ["MVP"],
+    },
   },
   packager: {
     section_order: ["file_map", "file_contents", "git_diff", "meta_prompts", "user_instructions"],
