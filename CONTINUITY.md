@@ -29,6 +29,7 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 16. (2026-06-10) Bead 12 entry: implement benchmarks, real MCP stdio multi-agent stress, and release docs on `codex/feat/bead-12-bench`; do not commit/push by implementation engineer. Risk class: Medium because this validates performance/concurrency claims and release docs, but does not alter public tool schemas. Rigor: TDD for stress gate plus real manual benchmark numbers.
 17. (2026-06-10) Bead 12 benchmark must not write to `../repoprompt-ce`; `scripts/bench.mjs` reads the source corpus and measures against a temporary working copy so `.rp-mini` cache/export writes stay outside the reference checkout.
 18. (2026-06-10) Bead 12 benchmark observed a real search anomaly: broad content queries such as `import` on the reference corpus can hit Node `execFile` stdout `maxBuffer` before rp-mini result caps shape the response. No ARG_MAX failure was observed separately; this is a post-MVP search streaming/capping follow-up.
+19. (2026-06-10) Bead 13 entry: benchmark three CE-repo investigation routes on `codex/docs/bead-13-investigation-benchmark`: installed rp-mini `/rp-investigate`, normal RepoPrompt `rp-investigate`, and non-RepoPrompt shell/Codex investigation. Risk class: Low research/docs; rigor: delegated subagent receipts, wall-clock timing, output-quality comparison, and local documentation artifact.
 
 ## State
 
@@ -45,18 +46,20 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - [x] Bead 9 implementation complete locally for supervisor review: codemap language expansion for Swift/Java/C/C++/C#/Ruby/PHP/Dart, extension mapping, SwiftUI wrapper/body/preview metadata, Package.swift dependency surface, and `tree-sitter-wasms@0.1.13` fallback grammars for Swift/C/Dart. Validation: `pnpm build && pnpm format:check && pnpm test` passed (107 tests). Acceptance: temp fixture CLI index computed 8 codemaps for one file per Bead 9 language; linked `get_code_structure` on SwiftUI fixture showed property wrappers, `View body`, and `Previews: 2`. No commit/push by implementation engineer.
 - [x] Bead 10 implementation complete locally for supervisor review: Claude Code plugin manifest, MCP config, generated context-builder agent, shared discovery contract, prompt build script, six rp-* skills, SessionStart warm hook, README, and plugin validation tests. Validation: initial targeted test failed for missing artifacts as expected; `pnpm build`, `pnpm format:check`, `pnpm test` passed (113 tests); `pnpm build:prompts && git diff --exit-code -- packages/cc-plugin/agents/context-builder.md` passed. No commit/push by implementation engineer; `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
 - [x] Bead 11 implementation complete locally for supervisor review: Codex plugin package, generated context-builder skill from shared discovery contract, six Codex-flavored rp-* skills, MCP TOML snippet, idempotent installer, README, AGENTS snippet, monorepo build wiring, and package validation tests. Validation: initial targeted Codex test failed for missing artifacts as expected; `pnpm build:prompts && pnpm build && pnpm format:check && pnpm test` passed (118 tests); Codex generator hash idempotence passed; sandboxed `install.sh --write-config` produced exactly one `[mcp_servers.rp-mini]` section. No commit/push by implementation engineer; `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
-- [x] Bead 12 implementation complete locally for supervisor review: manual benchmark CLI, real `../repoprompt-ce` benchmark report, real MCP stdio 4-session stress test, README final polish, and DEPLOYMENT release/run docs. Validation: `pnpm build && pnpm format:check && pnpm test` passed (119 tests); targeted stress test passed; `node scripts/bench.mjs --date 2026-06-10` wrote real numbers to `docs/bench.md`. No commit/push by implementation engineer; `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
+- [x] Bead 12 MERGED to main (PR #12, squash ef8dd22): manual benchmark CLI, real `../repoprompt-ce` benchmark report, real MCP stdio 4-session stress test, README final polish, and DEPLOYMENT release/run docs. Validation from bead: `pnpm build && pnpm format:check && pnpm test` passed (119 tests); targeted stress test passed; `node scripts/bench.mjs --date 2026-06-10` wrote real numbers to `docs/bench.md`.
+- [x] Bead 13 complete locally on `codex/docs/bead-13-investigation-benchmark`: three shell-capable subagents investigated `../repoprompt-ce` via installed rp-mini, normal RepoPrompt, and shell-only routes; benchmark synthesized in `docs/analysis/investigation-benchmark-2026-06-10.md`. Validation: `pnpm format:check` passed. Result: shell fastest wall clock (155s), normal RepoPrompt best guided synthesis (638s total, 447.7137s context_builder), rp-mini showed strong cache substrate (45.54s cold index, 0.66s warm index) but not hot-loaded slash workflow in the existing Codex process.
 
 ### Now
-- Bead 12 complete locally on `codex/feat/bead-12-bench`; awaiting supervisor review/commit/push. Agent selected: Codex implementation engineer; confidence high; fallback agent: primary reviewer. Risk class: Medium; rigor: TDD plus full build/format/test and real benchmark run. No commit or push by implementation engineer.
+- Bead 13 ready for supervisor review/commit on `codex/docs/bead-13-investigation-benchmark`. Agent selected: primary Codex orchestrator plus three shell-capable explore subagents; confidence medium-high; fallback agent: manual shell/RP verification. Risk class: Low research/docs; rigor: wall-clock timing, artifact receipts, output comparison, and format validation.
 
 ### Next
-- Bead 12 supervisor review/commit/push and append `handoff/beads.jsonl` with final commit SHA.
+- Review Bead 13 branch and decide whether to clean the generated CE `.rp-mini/` cache from the reference checkout.
 
 ## Open Questions
 - UNCONFIRMED: final published name ("rp-mini" working title; RepoPrompt trademark courtesy check before any public release)
 - Slice anchor-rebase deferred (v1 invalidates slices on content change)
 - Post-MVP search streaming/capping fix: avoid `execFile` stdout `maxBuffer` overflows on broad content queries before result caps are applied.
+- UNCONFIRMED: whether to delete the generated `/Users/kikimac/Documents/repoprompt-ce-refactor/repoprompt-ce/.rp-mini/` cache created by the direct rp-mini shakedown index; left untouched.
 
 ## Working Set
 - docs/plans/rp-mini-design-2026-06-10.md — canonical design
@@ -79,4 +82,5 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - packages/server/src/stress.test.ts — Bead 12 real stdio multi-agent stress test
 - scripts/bench.mjs — Bead 12 manual benchmark CLI
 - docs/bench.md — Bead 12 measured benchmark report
+- docs/analysis/investigation-benchmark-2026-06-10.md — Bead 13 target benchmark report
 - packages/codex-plugin/ — Bead 11 Codex installer, generated skills, config snippet, package tests, README, and AGENTS snippet

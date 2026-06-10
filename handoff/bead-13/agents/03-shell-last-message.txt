@@ -1,0 +1,7 @@
+/Users/kikimac/Documents/repoprompt-ce-refactor/rp-mini/handoff/bead-13/agents/03-shell-investigate.md
+
+CE implements rp-mini-like navigation through window-scoped MCP providers.
+Context Builder is a host agent workflow over selection/context tools, not a deterministic analyzer.
+Key CE performance patterns: ingress barriers, search admission lanes, codemap cache single-flight, parser limiting.
+rp-mini should preserve tool semantics, selection modes, token accounting, exports, and fail-closed edits.
+rp-mini should simplify away CE’s macOS UI/session runtime and improve streaming caps for broad search.

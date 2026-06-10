@@ -1,0 +1,7 @@
+/Users/kikimac/Documents/repoprompt-ce-refactor/rp-mini/handoff/bead-13/agents/02-repoprompt-investigate.md
+
+Normal RepoPrompt MCP worked after binding the two workspace roots.
+Context Builder was useful but slow: 447.7137s for the main investigation.
+CE CLI was unavailable noninteractively; `file_search`/`git` were advertised but not callable.
+Fallback shell search/read was used only for evidence and marked in the report.
+Report includes timings, file:line evidence, findings, unknowns, and an 8/10 self-score.
