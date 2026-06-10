@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
@@ -21,6 +24,17 @@ function firstText(result: unknown): string {
     throw new Error("Expected first MCP content item to be text.");
   }
   return content[0].text;
+}
+
+async function tempRoot(): Promise<string> {
+  const path = join(tmpdir(), `rp-mini-server-${crypto.randomUUID()}`);
+  await mkdir(path, { recursive: true });
+  return path;
+}
+
+async function write(path: string, content: string): Promise<void> {
+  await mkdir(join(path, ".."), { recursive: true });
+  await writeFile(path, content);
 }
 
 describe("rp-mini MCP server", () => {
@@ -52,30 +66,48 @@ describe("rp-mini MCP server", () => {
     expect(result.tools).toHaveLength(9);
   });
 
-  it("returns not_implemented JSON text for valid stub calls", async () => {
-    const { client } = await connectedClient();
+  it("serves real file_search over the linked transport", async () => {
+    const root = await tempRoot();
+    await write(
+      join(root, "packages/core/src/tokens/index.ts"),
+      "export function estimateTokens() {}\n",
+    );
+    const { client } = await connectedClient({ roots: [root] });
 
     const result = await client.callTool({
       name: "file_search",
-      arguments: { pattern: "Config", mode: "content", max_results: 5 },
+      arguments: { pattern: "estimateTokens", mode: "content", max_results: 5 },
+    });
+    const payload = JSON.parse(firstText(result)) as {
+      matches: Array<{ path: string }>;
+      limit_hit: boolean;
+    };
+
+    expect(payload.limit_hit).toBe(false);
+    expect(payload.matches.map((match) => match.path)).toEqual([
+      "packages/core/src/tokens/index.ts",
+    ]);
+  });
+
+  it("serves real read_file and get_file_tree over the linked transport", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "file.ts"), "one\ntwo\nthree\nfour\nfive\n");
+    const { client } = await connectedClient({ roots: [root] });
+
+    const read = await client.callTool({
+      name: "read_file",
+      arguments: { path: "src/file.ts", start_line: -2 },
+    });
+    expect(JSON.parse(firstText(read))).toMatchObject({
+      content: "four\nfive\n",
+      totalLines: 5,
+      firstLine: 4,
+      lastLine: 5,
     });
 
-    expect(result.content).toEqual([
-      {
-        type: "text",
-        text: JSON.stringify({
-          status: "not_implemented",
-          tool: "file_search",
-          parsed_args: {
-            pattern: "Config",
-            mode: "content",
-            regex: false,
-            context_lines: 0,
-            max_results: 5,
-          },
-        }),
-      },
-    ]);
+    const tree = await client.callTool({ name: "get_file_tree", arguments: { mode: "auto" } });
+    expect(JSON.parse(firstText(tree))).toMatchObject({ limit_hit: false });
+    expect(firstText(tree)).toContain("src");
   });
 
   it("rejects bad file_search args through schema validation", async () => {

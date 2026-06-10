@@ -39,6 +39,9 @@ export interface Config {
     extra: string[];
     ios_preset: IosIgnorePreset;
   };
+  search: {
+    ripgrep_path?: string;
+  };
   tools: {
     apply_edits: boolean;
     file_actions: boolean;
@@ -112,6 +115,7 @@ export const defaultConfig: Config = {
     extra: [],
     ios_preset: "auto",
   },
+  search: {},
   tools: { apply_edits: true, file_actions: true, git: true },
   selection: { auto_codemaps: true, persist: true, scope: "session" },
   context_builder: { enhancement: "rewrite", intent_detection: true },
@@ -222,6 +226,7 @@ function envToConfig(env: Record<string, string | undefined>): DeepPartial<Confi
   setString(result, ["selection", "scope"], env.RP_MINI_SELECTION_SCOPE);
   setString(result, ["context_builder", "enhancement"], env.RP_MINI_CONTEXT_BUILDER_ENHANCEMENT);
   setString(result, ["ignore", "ios_preset"], env.RP_MINI_IGNORE_IOS_PRESET);
+  setString(result, ["search", "ripgrep_path"], env.RP_MINI_RIPGREP_PATH);
   setString(result, ["paths"], env.RP_MINI_PATHS);
   setStringArray(result, ["roots"], env.RP_MINI_ROOTS);
   setStringArray(result, ["codemaps", "languages"], env.RP_MINI_CODEMAPS_LANGUAGES);
