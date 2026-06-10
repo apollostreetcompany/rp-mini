@@ -1,10 +1,14 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it } from "vitest";
 import { createRpMiniServer } from "./index.js";
+
+const execFileAsync = promisify(execFile);
 
 async function connectedClient(options: Parameters<typeof createRpMiniServer>[0] = {}) {
   const server = createRpMiniServer(options);
@@ -35,6 +39,26 @@ async function tempRoot(): Promise<string> {
 async function write(path: string, content: string): Promise<void> {
   await mkdir(join(path, ".."), { recursive: true });
   await writeFile(path, content);
+}
+
+async function git(root: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, {
+    cwd: root,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  return stdout;
+}
+
+async function initGitFixture(): Promise<string> {
+  const root = await tempRoot();
+  await git(root, ["init", "-b", "main"]);
+  await git(root, ["config", "user.email", "test@example.com"]);
+  await git(root, ["config", "user.name", "Test User"]);
+  await write(join(root, "src", "a.ts"), "one\ntwo\nthree\n");
+  await write(join(root, "src", "staged.ts"), "old\n");
+  await git(root, ["add", "."]);
+  await git(root, ["commit", "-m", "base"]);
+  return root;
 }
 
 describe("rp-mini MCP server", () => {
@@ -594,5 +618,74 @@ describe("rp-mini MCP server", () => {
       ),
     ) as { files: Array<{ path: string }> };
     expect(files.files.map((file) => file.path)).not.toContain("src/new.txt");
+  });
+
+  it("serves read-only git status and structured diff over linked transport", async () => {
+    const root = await initGitFixture();
+    await write(join(root, "src", "a.ts"), "one\nTWO\nthree\nfour\n");
+    await write(join(root, "src", "staged.ts"), "new\n");
+    await git(root, ["add", "src/staged.ts"]);
+    await write(join(root, "src", "new.ts"), "new\n");
+    const { client } = await connectedClient({ roots: [root] });
+
+    const status = JSON.parse(
+      firstText(await client.callTool({ name: "git", arguments: { op: "status" } })),
+    ) as { files: Array<{ path: string; state: string }>; totals: Record<string, number> };
+    expect(status.files).toEqual(
+      expect.arrayContaining([
+        { path: "src/a.ts", state: "unstaged" },
+        { path: "src/staged.ts", state: "staged" },
+        { path: "src/new.ts", state: "untracked" },
+      ]),
+    );
+    expect(status.totals).toMatchObject({ staged: 1, unstaged: 1, untracked: 1 });
+
+    const diff = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "git",
+          arguments: { op: "diff", detail: "patches", compare: "uncommitted" },
+        }),
+      ),
+    ) as { files: Array<{ path: string; hunks: Array<{ oldStart: number; newStart: number }> }> };
+    expect(diff.files.find((file) => file.path === "src/a.ts")).toMatchObject({
+      hunks: [{ oldStart: 1, newStart: 1 }],
+    });
+  });
+
+  it("exports review preset with automatic git diff section and token accounting", async () => {
+    const root = await initGitFixture();
+    await write(join(root, "src", "a.ts"), "one\nTWO\nthree\nfour\n");
+    const { client } = await connectedClient({
+      roots: [root],
+      sessionId: "git-export",
+      now: () => new Date("2026-06-10T00:00:00.000Z"),
+    });
+
+    await client.callTool({
+      name: "manage_selection",
+      arguments: { op: "set", mode: "full", paths: ["src/a.ts"] },
+    });
+    await client.callTool({
+      name: "prompt",
+      arguments: { op: "set", text: "Review the diff." },
+    });
+
+    const result = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "export", preset: "review" },
+    });
+    const payload = JSON.parse(firstText(result)) as {
+      payload_path: string;
+      sections: Record<string, string>;
+      tokens: { git_diff: number };
+    };
+    const text = await readFile(payload.payload_path, "utf8");
+
+    expect(payload.sections.git_diff).toContain("diff --git a/src/a.ts b/src/a.ts");
+    expect(payload.sections.git_diff).toContain("+four");
+    expect(payload.tokens.git_diff).toBeGreaterThan(0);
+    expect(text).toContain("<git_diff>");
+    expect(text).toContain("diff --git a/src/a.ts b/src/a.ts");
   });
 });
