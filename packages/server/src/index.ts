@@ -5,6 +5,12 @@ import {
   applyFileEdits,
   fileAction,
   generateFileTree,
+  getDiffTextForPackager,
+  gitBlame,
+  gitDiff,
+  gitLog,
+  gitShow,
+  gitStatus,
   getCodeStructures,
   getCatalog,
   readFileSlice,
@@ -12,6 +18,7 @@ import {
   resolveRootPath,
   searchFiles,
   SelectionState,
+  resolvePreset,
   type CatalogFile,
   type Config,
   type DeepPartial,
@@ -158,11 +165,12 @@ const toolDefinitions: ToolDefinition[] = [
       .object({
         op: z.enum(["snapshot", "export"]).default("snapshot"),
         include: z
-          .array(z.enum(["prompt", "selection", "code", "files", "tree", "tokens"]))
+          .array(z.enum(["prompt", "selection", "code", "files", "tree", "tokens", "git_diff"]))
           .optional(),
         preset: z.string().min(1).optional(),
         response_type: z.string().min(1).optional(),
         git_diff_text: z.string().optional(),
+        git_compare: z.string().optional(),
       })
       .strict(),
   },
@@ -254,6 +262,9 @@ const toolDefinitions: ToolDefinition[] = [
         detail: z.enum(["summary", "files", "patches", "full"]).default("summary"),
         path: z.string().min(1).optional(),
         count: positiveInt.optional(),
+        start_line: positiveInt.optional(),
+        end_line: positiveInt.optional(),
+        revspec: z.string().min(1).optional(),
       })
       .strict(),
   },
@@ -443,8 +454,53 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
       }
       return result;
     }
+    case "git": {
+      return handleGitTool(config, args);
+    }
     default:
       return { status: "not_implemented", tool: name, parsed_args: args };
+  }
+}
+
+async function handleGitTool(config: Config, args: unknown): Promise<unknown> {
+  const gitArgs = args as {
+    op: "status" | "diff" | "log" | "show" | "blame";
+    compare?: string;
+    detail?: "summary" | "files" | "patches" | "full";
+    count?: number;
+    path?: string;
+    start_line?: number;
+    end_line?: number;
+    revspec?: string;
+  };
+  try {
+    if (gitArgs.op === "status") return gitStatus(config.roots);
+    if (gitArgs.op === "diff") {
+      return gitDiff(config.roots, {
+        compare: gitArgs.compare,
+        detail: gitArgs.detail,
+        config,
+      });
+    }
+    if (gitArgs.op === "log")
+      return gitLog(config.roots, { count: gitArgs.count, path: gitArgs.path });
+    if (gitArgs.op === "show") {
+      return gitShow(config.roots, {
+        revspec: gitArgs.revspec ?? gitArgs.compare,
+        detail: gitArgs.detail,
+        config,
+      });
+    }
+    if (!gitArgs.path) {
+      return { error: { code: "invalid_request", message: "path is required for blame." } };
+    }
+    return gitBlame(config.roots, {
+      path: gitArgs.path,
+      start_line: gitArgs.start_line,
+      end_line: gitArgs.end_line,
+    });
+  } catch (error) {
+    return { error };
   }
 }
 
@@ -595,18 +651,33 @@ async function workspaceContext(
   await state.validateFresh();
   const contextArgs = args as {
     op?: "snapshot" | "export";
-    include?: Array<"prompt" | "selection" | "code" | "files" | "tree" | "tokens">;
+    include?: Array<"prompt" | "selection" | "code" | "files" | "tree" | "tokens" | "git_diff">;
     preset?: string;
     response_type?: string;
     git_diff_text?: string;
+    git_compare?: string;
   };
   const snapshot = state.snapshot();
+  const preset = resolvePreset(config, {
+    preset: contextArgs.preset,
+    responseType: contextArgs.response_type,
+    instructions: snapshot.prompt,
+  });
+  const shouldIncludeGit =
+    contextArgs.git_diff_text !== undefined ||
+    contextArgs.include?.includes("git_diff") ||
+    preset.config.git_inclusion !== "none";
+  const gitDiffText =
+    contextArgs.git_diff_text ??
+    (shouldIncludeGit
+      ? await bestEffortGitDiffText(config, contextArgs.git_compare ?? "uncommitted")
+      : undefined);
   const payload = await assemblePayload(snapshot, config, {
     root: config.roots[0] ?? process.cwd(),
     catalog,
     preset: contextArgs.preset,
     responseType: contextArgs.response_type,
-    gitDiffText: contextArgs.git_diff_text,
+    gitDiffText,
     now,
   });
   const response: Record<string, unknown> = {
@@ -644,6 +715,14 @@ async function workspaceContext(
     response.receipt_path = receiptPath;
   }
   return response;
+}
+
+async function bestEffortGitDiffText(config: Config, compare: string): Promise<string | undefined> {
+  try {
+    return await getDiffTextForPackager(config.roots, compare, config.caps.git_patch_lines);
+  } catch {
+    return undefined;
+  }
 }
 
 function selectedTreeOptions(state: SelectionState) {
