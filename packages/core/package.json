@@ -8,6 +8,9 @@
     "./cache": "./dist/cache/index.js",
     "./catalog": "./dist/catalog/index.js",
     "./config": "./dist/config/index.js",
+    "./read": "./dist/read/index.js",
+    "./search": "./dist/search/index.js",
+    "./tree": "./dist/tree/index.js",
     "./tokens": "./dist/tokens/index.js"
   },
   "dependencies": {
@@ -15,5 +18,8 @@
   },
   "scripts": {
     "build": "tsc -b"
+  },
+  "optionalDependencies": {
+    "@vscode/ripgrep": "^1.18.0"
   }
 }

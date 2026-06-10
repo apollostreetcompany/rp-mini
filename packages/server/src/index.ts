@@ -1,4 +1,16 @@
-import { defaultConfig, type Config, type DeepPartial } from "@rp-mini/core";
+import {
+  defaultConfig,
+  generateFileTree,
+  getCatalog,
+  readFileSlice,
+  relativeToRoot,
+  resolveRootPath,
+  searchFiles,
+  type CatalogFile,
+  type Config,
+  type DeepPartial,
+  type FileCatalog,
+} from "@rp-mini/core";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -27,12 +39,15 @@ const toolDefinitions: ToolDefinition[] = [
         pattern: z.string().min(1),
         mode: z.enum(["auto", "path", "content", "both"]).default("auto"),
         regex: z.boolean().default(false),
+        whole_word: z.boolean().default(false),
         filters: z
           .object({
-            include: z.array(z.string()).optional(),
+            paths: z.array(z.string()).optional(),
+            extensions: z.array(z.string()).optional(),
             exclude: z.array(z.string()).optional(),
           })
           .optional(),
+        contextPaths: z.array(z.string()).optional(),
         context_lines: nonNegativeInt.default(0),
         max_results: positiveInt.default(50),
       })
@@ -219,22 +234,89 @@ export function createRpMiniServer(options: RpMiniServerOptions = {}): McpServer
         description: definition.description,
         inputSchema: definition.inputSchema,
       },
-      async (args) => ({
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              status: "not_implemented",
-              tool: definition.name,
-              parsed_args: args,
-            }),
-          },
-        ],
-      }),
+      async (args) => toolResponse(await handleTool(definition.name, args, config)),
     );
   }
 
   return server;
+}
+
+async function handleTool(name: string, args: unknown, config: Config): Promise<unknown> {
+  switch (name) {
+    case "file_search": {
+      const catalog = await getCatalog(config.roots, config);
+      return searchFiles(catalog, config, normalizeSearchArgs(args));
+    }
+    case "read_file": {
+      const catalog = await getCatalog(config.roots, config);
+      const readArgs = args as { path: string; start_line?: number; limit?: number };
+      const file = findCatalogFile(catalog, readArgs.path);
+      if (!file) {
+        return { error: { code: "not_found", message: `${readArgs.path} is not in the catalog.` } };
+      }
+      return readFileSlice(file, { startLine: readArgs.start_line, limit: readArgs.limit });
+    }
+    case "get_file_tree": {
+      const catalog = await getCatalog(config.roots, config);
+      const treeArgs = args as {
+        mode?: "auto" | "full" | "folders" | "selected";
+        max_depth?: number;
+        path?: string;
+      };
+      return generateFileTree(catalog, config, {
+        mode: treeArgs.mode,
+        maxDepth: treeArgs.max_depth,
+        path: treeArgs.path,
+      });
+    }
+    default:
+      return { status: "not_implemented", tool: name, parsed_args: args };
+  }
+}
+
+function toolResponse(payload: unknown) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(payload),
+      },
+    ],
+  };
+}
+
+function normalizeSearchArgs(args: unknown) {
+  const searchArgs = args as {
+    pattern: string;
+    mode?: "auto" | "path" | "content" | "both";
+    regex?: boolean;
+    whole_word?: boolean;
+    filters?: { paths?: string[]; extensions?: string[]; exclude?: string[] };
+    contextPaths?: string[];
+    context_lines?: number;
+    max_results?: number;
+  };
+  return {
+    pattern: searchArgs.pattern,
+    mode: searchArgs.mode,
+    regex: searchArgs.regex,
+    whole_word: searchArgs.whole_word,
+    filters: searchArgs.filters,
+    contextPaths: searchArgs.contextPaths,
+    context_lines: searchArgs.context_lines,
+    max_results: searchArgs.max_results,
+  };
+}
+
+function findCatalogFile(catalog: FileCatalog, path: string): CatalogFile | undefined {
+  for (const root of catalog.roots) {
+    const relative = relativeToRoot(root.root, resolveRootPath(root.root, path));
+    const found = root.files.find(
+      (file) => file.relativePath === relative || file.absolutePath === path,
+    );
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function mergeConfig(base: Config, overrides: DeepPartial<Config>, roots?: string[]): Config {
