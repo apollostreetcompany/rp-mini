@@ -37,6 +37,15 @@ function listValue(value: string): string[] {
 }
 
 describe("Claude Code plugin package", () => {
+  const rpSkills = [
+    "rp-build",
+    "rp-investigate",
+    "rp-review",
+    "rp-refactor",
+    "rp-plan",
+    "rp-export",
+  ];
+
   it("declares a valid plugin manifest", () => {
     const manifest = readJson(join(pluginRoot, ".claude-plugin/plugin.json")) as {
       name?: string;
@@ -94,8 +103,14 @@ describe("Claude Code plugin package", () => {
     const agent = readText(agentPath);
     const requiredPhrases = [
       '<taskname="',
+      "Workspace Binding",
+      'root="<absolute path>"',
+      "get_file_tree mode=folders max_depth=1",
       "Degradation ladder",
       "Pre-halt checklist (MANDATORY)",
+      'manage_selection op=save_profile name="handoff-<short-task-slug>"',
+      "manage_selection op=load_profile",
+      "state the profile name and final token total",
       "FINAL GATE",
       "rewrite",
       "augment",
@@ -123,17 +138,19 @@ describe("Claude Code plugin package", () => {
     }
   });
 
-  it("defines thin skills that delegate to the context-builder subagent", () => {
-    const skills = [
-      "rp-build",
-      "rp-investigate",
-      "rp-review",
-      "rp-refactor",
-      "rp-plan",
-      "rp-export",
-    ];
+  it("documents selection-profile handoff and workspace binding in the shared contract", () => {
+    const contract = readText(contractPath);
 
-    for (const skill of skills) {
+    expect(contract).toContain("## Workspace Binding");
+    expect(contract).toContain("get_file_tree mode=folders max_depth=1");
+    expect(contract).toContain('root="<absolute path>"');
+    expect(contract).toContain('manage_selection op=save_profile name="handoff-<short-task-slug>"');
+    expect(contract).toContain("manage_selection op=load_profile");
+    expect(contract).toContain("final token total");
+  });
+
+  it("defines thin skills that delegate to the context-builder subagent", () => {
+    for (const skill of rpSkills) {
       const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
       const front = frontmatter(text);
       expect(front.name).toBe(skill);
@@ -142,6 +159,36 @@ describe("Claude Code plugin package", () => {
       expect(text).toContain("context-builder");
       expect(text).toContain("response_type");
       expect(text.split("\n").length).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("keeps workspace binding and shell CLI fallback notes in every rp-* skill", () => {
+    for (const skill of rpSkills) {
+      const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
+      expect(text).toContain("Check workspace binding first");
+      expect(text).toContain("root=<absolute path>");
+      expect(text).toContain(
+        "node packages/server/dist/cli.js tool <workspace> <tool> --json-args",
+      );
+    }
+  });
+
+  it("adds investigation triage fast path and export receipts where required", () => {
+    const investigate = readText(join(pluginRoot, "skills/rp-investigate/SKILL.md"));
+    expect(investigate).toContain("Triage fast path");
+    expect(investigate).toContain("Bounded question");
+    expect(investigate).toContain("do not spawn the builder");
+    expect(investigate).toContain("file_search");
+    expect(investigate).toContain("read_file");
+    expect(investigate).toContain("get_code_structure");
+    expect(investigate).toContain("line-cited evidence");
+
+    for (const skill of ["rp-investigate", "rp-review", "rp-export"]) {
+      const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
+      expect(text).toContain("workspace_context op=export");
+      expect(text).toContain("token totals");
+      expect(text).toContain("content hash");
+      expect(text).toContain("saved handoff profile");
     }
   });
 

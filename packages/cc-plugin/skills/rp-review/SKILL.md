@@ -7,6 +7,9 @@ description: Code review workflow using rp-mini git context and context-builder.
 
 Use this when the user asks for a code review, PR review, diff review, or comparison against another ref.
 
+Check workspace binding first. On mismatch, pass `root=<absolute path>` on every rp-mini tool call.
+If a shell is available and no MCP client is loaded, use `node packages/server/dist/cli.js tool <workspace> <tool> --json-args '...'` or its wrappers.
+
 1. Survey changes with `git` status/log/diff and infer comparison scope.
 2. Clarify first: if the comparison target is ambiguous or missing, ask with AskUserQuestion and wait before spawning the builder.
 3. Spawn the `context-builder` subagent with:
@@ -16,6 +19,7 @@ Use this when the user asks for a code review, PR review, diff review, or compar
    - enhancement mode: `rewrite` unless the user requested `augment` or `preserve`
 4. Act on the handoff: review diff context and affected-but-unchanged sources together.
 5. Judge correctness, security, API/contracts, tests, maintainability, and consistency with existing patterns.
-6. Report findings first, ordered by severity, with file:line references and concrete fixes. Keep summary secondary.
+6. Finish with a `workspace_context op=export` receipt: token totals, content hash, and saved handoff profile.
+7. Report findings first, ordered by severity, with file:line references and concrete fixes. Keep summary secondary.
 
 Do not provide review feedback before `context-builder` has built review-mode context unless the user explicitly requested a quick/manual review.
