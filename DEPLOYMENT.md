@@ -10,6 +10,7 @@
 ## Local Commands
 - Install: `pnpm install`
 - Build: `pnpm build`
+- Build generated plugin prompts: `pnpm build:prompts`
 - Format check: `pnpm format:check`
 - Test: `pnpm test`
 - CLI index smoke: `node packages/server/dist/cli.js index .`
@@ -18,8 +19,15 @@
 - Bin name: `rp-mini`
 - Stdio command after build/package linking: `rp-mini serve --root <path>`
 - Default root when no `--root` is passed: current working directory.
-- `file_search`, `read_file`, and `get_file_tree` are real handlers as of Bead 3; the other seven tools remain intentional stubs until their beads.
+- Claude Code plugin config: `packages/cc-plugin/.mcp.json` starts `node ${CLAUDE_PLUGIN_ROOT}/../server/dist/cli.js serve`; if plugin-root relative resolution is unavailable, use the documented `npx rp-mini serve` fallback after packaging.
+- `file_search`, `read_file`, `get_file_tree`, `get_code_structure`, `manage_selection`, `workspace_context`, `prompt`, `apply_edits`, `file_actions`, and `git` are real handlers as of Bead 8.
 - `rp-mini index [path]` writes `.rp-mini/catalog.json`.
+
+## Claude Code Plugin
+- Plugin root: `packages/cc-plugin`.
+- Install from checkout after build: `claude plugin install ./packages/cc-plugin`.
+- Generated agent: `packages/cc-plugin/agents/context-builder.md`, rendered from `shared-prompts/discovery/contract.md` via `pnpm build:prompts`.
+- Optional warm hook: `hooks/hooks.json` runs `rp-mini index .` in the background on `SessionStart`; warming is never required for correctness and no tool call waits on it.
 
 ## Deployment Status
 - No hosted deployment target yet.

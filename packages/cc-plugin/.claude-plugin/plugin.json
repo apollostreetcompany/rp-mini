@@ -1,0 +1,6 @@
+{
+  "name": "rp-mini",
+  "description": "Claude Code plugin for rp-mini context engineering: MCP tools, context-builder subagent, workflow skills, and optional warm hook.",
+  "version": "0.1.0",
+  "author": "Apollo Street Company"
+}
