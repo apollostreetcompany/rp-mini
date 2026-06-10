@@ -110,6 +110,51 @@ describe("rp-mini MCP server", () => {
     expect(firstText(tree)).toContain("src");
   });
 
+  it("serves real get_code_structure with cap metadata over the linked transport", async () => {
+    const root = await tempRoot();
+    await write(
+      join(root, "packages/core/src/catalog/index.ts"),
+      [
+        "export interface CatalogEntry { relativePath: string }",
+        "export function getCatalog() { return null; }",
+        "export function buildCatalog() { return null; }",
+        "export function verifyFresh() { return true; }",
+      ].join("\n"),
+    );
+    const { client } = await connectedClient({
+      roots: [root],
+      config: { caps: { structure_tokens: 80 } },
+    });
+
+    const result = await client.callTool({
+      name: "get_code_structure",
+      arguments: { paths: ["packages/core/src/catalog/index.ts"], max_results: 10 },
+    });
+    const payload = JSON.parse(firstText(result)) as {
+      files: Array<{ path: string; text: string }>;
+      limit_hit: boolean;
+      omitted_total: number;
+    };
+
+    expect(payload.files[0]?.text).toContain("getCatalog");
+    expect(payload.files[0]?.text).toContain("buildCatalog");
+    expect(payload.files[0]?.text).toContain("verifyFresh");
+    expect(payload.limit_hit).toBe(false);
+  });
+
+  it("returns the selected-scope placeholder until selection exists", async () => {
+    const { client } = await connectedClient();
+
+    const result = await client.callTool({
+      name: "get_code_structure",
+      arguments: { scope: "selected" },
+    });
+
+    expect(JSON.parse(firstText(result))).toEqual({
+      error: { code: "not_available_until_selection" },
+    });
+  });
+
   it("rejects bad file_search args through schema validation", async () => {
     const { client } = await connectedClient();
 

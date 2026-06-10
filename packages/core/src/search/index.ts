@@ -4,6 +4,7 @@ import { relative, sep } from "node:path";
 import { promisify } from "node:util";
 import type { CatalogFile, FileCatalog } from "../catalog/index.js";
 import type { Config } from "../config/index.js";
+import { lookupDefiningFiles } from "../codemaps/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -106,7 +107,6 @@ export function rankSearchResults(
   matches: SearchMatch[],
   options: RankOptions = {},
 ): SearchMatch[] {
-  void options.symbolIndex; // TODO(bead-4): boost symbol-definition hits from codemap index.
   return matches
     .map((match, index) => {
       const baseline = Math.max(0, 1000 - index);
@@ -118,12 +118,19 @@ export function rankSearchResults(
       );
       const recencyRank = options.recency?.get(match.path);
       const recencyBoost = recencyRank === undefined ? 0 : Math.max(0, 200 - recencyRank);
+      const symbolBoost = symbolDefinitionBoost(match, options.symbolIndex);
       return {
         ...match,
-        score: (match.score ?? 0) + baseline + proximity * 40 + recencyBoost,
+        score: (match.score ?? 0) + baseline + proximity * 40 + recencyBoost + symbolBoost,
       };
     })
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || a.path.localeCompare(b.path));
+}
+
+function symbolDefinitionBoost(match: SearchMatch, symbolIndex: unknown): number {
+  const symbol = match.matchText?.match(/\b[A-Z][A-Za-z0-9_]*\b/)?.[0];
+  if (!symbol) return 0;
+  return lookupDefiningFiles(symbolIndex, symbol).includes(match.path) ? 2000 : 0;
 }
 
 export async function buildGitRecencyCache(root: string): Promise<GitRecencyCache> {

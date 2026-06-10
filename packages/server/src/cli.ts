@@ -1,5 +1,11 @@
 #!/usr/bin/env node
-import { atomicWriteJson, buildCatalog, cacheDir, loadConfig } from "@rp-mini/core";
+import {
+  atomicWriteJson,
+  buildCatalog,
+  cacheDir,
+  loadConfig,
+  warmCodemapCache,
+} from "@rp-mini/core";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { join, resolve } from "node:path";
 import { createRpMiniServer } from "./index.js";
@@ -21,9 +27,10 @@ async function main(argv: string[]): Promise<void> {
       const config = await loadConfig(root, { roots: [root] });
       const catalog = await buildCatalog([root], config);
       const rootCatalog = catalog.roots[0]!;
+      const codemaps = await warmCodemapCache(catalog, config);
       await atomicWriteJson(join(cacheDir(root), "catalog.json"), catalog);
       console.log(
-        `${root}: ${rootCatalog.files.length} files, ${rootCatalog.dirs.length} dirs, ${rootCatalog.ignored} ignored, took ${(rootCatalog.tookMs / 1000).toFixed(3)}s`,
+        `${root}: ${rootCatalog.files.length} files, ${rootCatalog.dirs.length} dirs, ${rootCatalog.ignored} ignored, took ${(rootCatalog.tookMs / 1000).toFixed(3)}s; codemaps: ${codemaps.cached} cached, ${codemaps.computed} computed, ${codemaps.skipped} skipped(gated)`,
       );
     }
     return;

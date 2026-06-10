@@ -21,6 +21,8 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 8. (2026-06-10) Bead 2 entry: implement catalog/cache/index test-first on branch `codex/feat/bead-2-catalog`; do not commit or push from the implementation-agent turn. Lazy grammar loading remains with codemap work in Bead 4; Bead 2 owns only catalog/cache substrate.
 9. (2026-06-10) Bead 2 implementation keeps `.xcodeproj` packages fully ignored under the iOS preset, while `.xcassets` directories are retained as single summarizable directory nodes without descending into internals.
 10. (2026-06-10) Bead 3 entry: implement navigation tools on branch `codex/feat/bead-3-nav`; scope is real `file_search`, `read_file`, and `get_file_tree` only, no commit/push by implementation engineer. Risk class: Medium because MCP tool schemas/behavior change; rigor: TDD with temp-dir fixtures and linked-transport server smoke.
+11. (2026-06-10) Bead 4 implementation uses `@vscode/tree-sitter-wasm` parser APIs for lazy WASM grammars because `tree-sitter-wasms` installed but its binaries failed a `web-tree-sitter` 0.26 load probe. Final runtime dependency is `@vscode/tree-sitter-wasm`; `tree-sitter-wasms` was removed as unused.
+12. (2026-06-10) Bead 4 serializer targets CE structural parity, not byte parity: same section ordering and line-numbered signatures, with member-list truncation markers preserving later sections such as exports.
 
 ## State
 
@@ -29,12 +31,14 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - [x] Bead 1 MERGED to main (PR #1, squash 50e0f4f, CI green): monorepo scaffold, layered config, token heuristic, 10-tool MCP server skeleton, CLI, CI, LICENSE/notices. 10/10 tests. Branch protection: `test` check required on main.
 - [x] Bead 2 implementation complete locally for supervisor review: catalog walk/ignore stack/iOS preset, size/binary/generated flags, verifyFresh, cache substrate, and `rp-mini index` snapshot. Validation: `pnpm build && pnpm format:check && pnpm test` passed (22 tests); `node packages/server/dist/cli.js index .` wrote `.rp-mini/catalog.json` with 40 files, 14 dirs, 9 ignored; no commit/push by implementation agent.
 - [x] Bead 3 implementation complete locally for supervisor review: real `file_search`, `read_file`, and `get_file_tree` handlers wired through MCP linked transport; core search/read/tree modules added with TDD coverage. Validation: `pnpm build && pnpm format:check && pnpm test` passed (33 tests). Acceptance smoke over linked transport passed: `file_search {"pattern":"estimateTokens"}` returned `limit_hit=false`, `read_file start_line=-5` returned 5 lines, and `get_file_tree mode=auto` estimated 530 tokens. No commit/push by implementation engineer.
+- [x] Bead 4 implementation complete locally for supervisor review: CodeMaps v1 for TS/TSX/JS/Python/Go/Rust via lazy WASM parser, FileAPI serializer, sha cache, type index, search symbol boost, `get_code_structure`, tree `+` markers, and `rp-mini index` codemap warm stats. Validation: `pnpm build && pnpm format:check && pnpm test` passed (48 tests). Acceptance: cold index computed 28 codemaps then second index cached 28; linked transport `get_code_structure packages/core/src/catalog/index.ts` listed `getCatalog`, `buildCatalog`, and `verifyFresh` with line numbers. No commit/push by implementation engineer.
 
 ### Now
-- Supervisor review of Bead 3 working tree on `codex/feat/bead-3-nav`; no commit/push performed by implementation engineer per prompt. `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
+- Supervisor review of Bead 4 working tree on `codex/feat/bead-4-codemaps`; no commit/push performed by implementation engineer per prompt. `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
 
 ### Next
-- Bead 4: codemaps v1 + cache + type index + lazy grammars
+- Supervisor review of Bead 4 working tree; `handoff/beads.jsonl` append after review/commit because schema requires `commit_sha`.
+- Bead 5: tokens + selection state machine + profiles
 
 ## Open Questions
 - UNCONFIRMED: final published name ("rp-mini" working title; RepoPrompt trademark courtesy check before any public release)
@@ -52,5 +56,6 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - packages/core/src/search/ — Bead 3 ripgrep bridge, path fuzzy search, caps, ranker
 - packages/core/src/read/ — Bead 3 read-file slicing with verify-on-read and refusal errors
 - packages/core/src/tree/ — Bead 3 deterministic tree rendering and auto trim
+- packages/core/src/codemaps/ — Bead 4 lazy WASM codemap extraction, serializer, cache, and type index
 - packages/server/src/index.ts / packages/server/src/cli.ts — MCP stub server and `rp-mini` CLI
 - packages/server/src/cli.test.ts — Bead 2 CLI index smoke over temp roots
