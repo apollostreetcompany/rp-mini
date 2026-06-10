@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { loadConfig } from "@rp-mini/core";
+import { atomicWriteJson, buildCatalog, cacheDir, loadConfig } from "@rp-mini/core";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { join, resolve } from "node:path";
 import { createRpMiniServer } from "./index.js";
 
 async function main(argv: string[]): Promise<void> {
@@ -15,7 +16,16 @@ async function main(argv: string[]): Promise<void> {
   }
 
   if (command === "index") {
-    console.log("not implemented");
+    const roots = rest.length > 0 ? rest.map((root) => resolve(root)) : [process.cwd()];
+    for (const root of roots) {
+      const config = await loadConfig(root, { roots: [root] });
+      const catalog = await buildCatalog([root], config);
+      const rootCatalog = catalog.roots[0]!;
+      await atomicWriteJson(join(cacheDir(root), "catalog.json"), catalog);
+      console.log(
+        `${root}: ${rootCatalog.files.length} files, ${rootCatalog.dirs.length} dirs, ${rootCatalog.ignored} ignored, took ${(rootCatalog.tookMs / 1000).toFixed(3)}s`,
+      );
+    }
     return;
   }
 

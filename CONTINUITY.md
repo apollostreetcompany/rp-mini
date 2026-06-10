@@ -18,19 +18,22 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 5. (2026-06-10) Receipts aligned with operator-contracts-and-receipts; mvp preset; proconsult consumes rp-export files.
 6. (2026-06-10) iOS: Tier 1.5 (ignore preset, Package.swift deps, metadata annotations) post-MVP; SwiftUI codemap v2 + asset summarizer Tier 2. Orthogonal to Xcode/Figma MCP.
 7. (2026-06-10) Bead 1 implementation uses pnpm workspaces, TypeScript strict ESM, SDK `McpServer.registerTool` with Zod-backed schemas, and SDK validation semantics where invalid tool calls return `isError: true` MCP results instead of throwing client-side.
+8. (2026-06-10) Bead 2 entry: implement catalog/cache/index test-first on branch `codex/feat/bead-2-catalog`; do not commit or push from the implementation-agent turn. Lazy grammar loading remains with codemap work in Bead 4; Bead 2 owns only catalog/cache substrate.
+9. (2026-06-10) Bead 2 implementation keeps `.xcodeproj` packages fully ignored under the iOS preset, while `.xcassets` directories are retained as single summarizable directory nodes without descending into internals.
 
 ## State
 
 ### Done
 - [x] Repo scaffolded with contract files; GitHub remote created
-- [x] Bead 1 implementation complete locally: monorepo scaffold, config loader, token heuristic, MCP server stubs, CLI, CI, Apache-2.0 license, third-party notice. Awaiting supervisor review/commit.
+- [x] Bead 1 MERGED to main (PR #1, squash 50e0f4f, CI green): monorepo scaffold, layered config, token heuristic, 10-tool MCP server skeleton, CLI, CI, LICENSE/notices. 10/10 tests. Branch protection: `test` check required on main.
+- [x] Bead 2 implementation complete locally for supervisor review: catalog walk/ignore stack/iOS preset, size/binary/generated flags, verifyFresh, cache substrate, and `rp-mini index` snapshot. Validation: `pnpm build && pnpm format:check && pnpm test` passed (22 tests); `node packages/server/dist/cli.js index .` wrote `.rp-mini/catalog.json` with 40 files, 14 dirs, 9 ignored; no commit/push by implementation agent.
 
 ### Now
-- Supervisor review of Bead 1 working tree; no commit/push performed by implementation agent per prompt.
+- Supervisor review of Bead 2 working tree on `codex/feat/bead-2-catalog`; no commit/push performed by implementation agent per prompt.
 
 ### Next
-- Bead 2: catalog (walk/ignore/caps/lazy grammars) + `rp-mini index` warm command
-- Bead 3: search/read/tree + relevance ranker
+- Bead 3: search/read/tree tools + relevance ranker
+- Bead 4: codemaps v1 + cache + type index + lazy grammars
 
 ## Open Questions
 - UNCONFIRMED: final published name ("rp-mini" working title; RepoPrompt trademark courtesy check before any public release)
@@ -42,5 +45,8 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - handoff/beads.jsonl — bead evidence
 - package.json / pnpm-workspace.yaml / tsconfig*.json — Bead 1 monorepo and build/test entrypoints
 - packages/core/src/config/index.ts — layered config defaults and loader
+- packages/core/src/catalog/ — Bead 2 catalog walk, ignore stack, generated detection, verify-on-read
+- packages/core/src/cache/ — Bead 2 .rp-mini cache helpers and atomic JSON writes
 - packages/core/src/tokens/index.ts — heuristic token estimator
 - packages/server/src/index.ts / packages/server/src/cli.ts — MCP stub server and `rp-mini` CLI
+- packages/server/src/cli.test.ts — Bead 2 CLI index smoke over temp roots

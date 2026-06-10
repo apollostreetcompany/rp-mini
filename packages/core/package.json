@@ -5,8 +5,13 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
+    "./cache": "./dist/cache/index.js",
+    "./catalog": "./dist/catalog/index.js",
     "./config": "./dist/config/index.js",
     "./tokens": "./dist/tokens/index.js"
+  },
+  "dependencies": {
+    "ignore": "^7.0.5"
   },
   "scripts": {
     "build": "tsc -b"
