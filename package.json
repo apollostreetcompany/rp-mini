@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "build:prompts": "pnpm --filter @rp-mini/cc-plugin build:prompts",
     "test": "vitest run",
     "format:check": "prettier --check ."
   },
