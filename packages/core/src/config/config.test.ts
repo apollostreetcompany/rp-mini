@@ -55,6 +55,7 @@ describe("loadConfig", () => {
     );
 
     expect(config.budgets).toEqual({ discovery: 400, plan: 300 });
+    expect(config.dynamic_roots).toEqual({ enabled: true, max: 4 });
     expect(config.tools).toMatchObject({
       apply_edits: false,
       file_actions: false,
@@ -82,5 +83,25 @@ describe("loadConfig", () => {
 
     expect(defaultConfig.ignore).toEqual({ extra: [], ios_preset: "auto" });
     expect(config.ignore).toEqual({ extra: ["vendor/**"], ios_preset: false });
+  });
+
+  it("loads dynamic root config defaults, workspace overrides, env, and per-call overrides", async () => {
+    const rootDir = await tempRoot();
+    await writeFile(
+      join(rootDir, "rp-mini.config.json"),
+      JSON.stringify({ dynamic_roots: { enabled: false, max: 2 } }),
+    );
+
+    const config = await loadConfig(
+      rootDir,
+      { dynamic_roots: { max: 6 } },
+      {
+        env: { RP_MINI_DYNAMIC_ROOTS_ENABLED: "true", RP_MINI_DYNAMIC_ROOTS_MAX: "3" },
+        homeDir: await tempRoot(),
+      },
+    );
+
+    expect(defaultConfig.dynamic_roots).toEqual({ enabled: true, max: 4 });
+    expect(config.dynamic_roots).toEqual({ enabled: true, max: 6 });
   });
 });
