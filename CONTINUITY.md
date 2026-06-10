@@ -24,6 +24,7 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 11. (2026-06-10) Bead 4 implementation uses `@vscode/tree-sitter-wasm` parser APIs for lazy WASM grammars because `tree-sitter-wasms` installed but its binaries failed a `web-tree-sitter` 0.26 load probe. Final runtime dependency is `@vscode/tree-sitter-wasm`; `tree-sitter-wasms` was removed as unused.
 12. (2026-06-10) Bead 4 serializer targets CE structural parity, not byte parity: same section ordering and line-numbered signatures, with member-list truncation markers preserving later sections such as exports.
 13. (2026-06-10) Bead 6 entry: implement packager XML payloads, intent presets, meta prompts, and export receipts on branch `codex/feat/bead-6-packager`; do not commit/push by implementation engineer. Risk class: Medium because `workspace_context` export/snapshot behavior and MCP input schema change; rigor: TDD with core packager fixtures plus linked-transport export smoke.
+14. (2026-06-10) Bead 7 implementation ports the apply_edits ladder as a fail-closed TypeScript engine: literal, escape-decode, normalized line fuzzy matching with ambiguity rejection, transactional batch spans, CRLF/trailing-newline preservation, and post-mutation catalog/codemap/selection refresh hooks.
 
 ## State
 
@@ -35,12 +36,13 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - [x] Bead 4 implementation complete locally for supervisor review: CodeMaps v1 for TS/TSX/JS/Python/Go/Rust via lazy WASM parser, FileAPI serializer, sha cache, type index, search symbol boost, `get_code_structure`, tree `+` markers, and `rp-mini index` codemap warm stats. Validation: `pnpm build && pnpm format:check && pnpm test` passed (48 tests). Acceptance: cold index computed 28 codemaps then second index cached 28; linked transport `get_code_structure packages/core/src/catalog/index.ts` listed `getCatalog`, `buildCatalog`, and `verifyFresh` with line numbers. No commit/push by implementation engineer.
 - [x] Bead 5 implementation complete locally for supervisor review: selection state machine, slice normalization/subtraction, per-session persistence, profiles, auto-codemap dependencies, token delta accounting, prompt storage, `manage_selection`, `workspace_context`, selected tree, and selected code structure. Validation: `pnpm build && pnpm format:check && pnpm test` passed (56 tests). Acceptance covered over linked transport: full selection summary with token totals, auto codemap for referenced type definitions, stable workspace snapshot hash, export path with injected clock, prompt ops, and stale slice invalidation. No commit/push by implementation engineer.
 - [x] Bead 6 implementation complete locally for supervisor review: packager XML payload assembly, presets including `mvp`, review intent detection, shared Architect/Review meta prompts, receipt JSON, and `workspace_context` export payload+receipt wiring. Validation: `pnpm build && pnpm format:check && pnpm test` passed (63 tests). Acceptance covered over linked transport: two selected files + prompt exported with plan preset, payload contained `<file_map>`, `<file_contents>`, `<meta prompt 1 = "Architect">`, and `<user_instructions>`; repeated export produced the same content hash and different payload paths. No commit/push by implementation engineer.
+- [x] Bead 7 implementation complete locally for supervisor review: real `apply_edits` ladder, transactional batch edits, `file_actions`, workspace path guardrails, unified diff output, codemap cache eviction, catalog memo invalidation, and selection token/slice refresh. Validation: `pnpm build && pnpm format:check && pnpm test` passed (82 tests). Acceptance covered over linked transport: whitespace-drifted search succeeded with `matched_by:["fuzzy"]`; ambiguous two-block fuzzy edit returned `ambiguous_match` with candidate lines and left the file untouched; 3-edit batch produced the hand-computed final file. No commit/push by implementation engineer.
 
 ### Now
-- Supervisor review of Bead 6 working tree on `codex/feat/bead-6-packager`; no commit/push performed by implementation engineer per prompt. `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
+- Supervisor review of Bead 7 working tree on `codex/feat/bead-7-edits`; no commit/push performed by implementation engineer per prompt. `handoff/beads.jsonl` still needs supervisor append after review/commit because schema requires `commit_sha`.
 
 ### Next
-- Bead 7: apply_edits ladder.
+- Bead 8: git tool.
 
 ## Open Questions
 - UNCONFIRMED: final published name ("rp-mini" working title; RepoPrompt trademark courtesy check before any public release)
@@ -60,6 +62,7 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - packages/core/src/tree/ — Bead 3 deterministic tree rendering and auto trim
 - packages/core/src/codemaps/ — Bead 4 lazy WASM codemap extraction, serializer, cache, and type index
 - packages/core/src/packager/ — Bead 6 packager XML assembly, intent presets, receipts
+- packages/core/src/edits/ — Bead 7 apply_edits ladder, batch edit transactionality, and file_actions helpers
 - shared-prompts/meta/ — Bead 6 shared meta prompt markdown
-- packages/server/src/index.ts / packages/server/src/cli.ts — MCP stub server and `rp-mini` CLI
+- packages/server/src/index.ts / packages/server/src/cli.ts — MCP server handlers and `rp-mini` CLI
 - packages/server/src/cli.test.ts — Bead 2 CLI index smoke over temp roots

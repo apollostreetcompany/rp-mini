@@ -13,6 +13,7 @@
     "./read": "./dist/read/index.js",
     "./search": "./dist/search/index.js",
     "./selection": "./dist/selection/index.js",
+    "./edits": "./dist/edits/index.js",
     "./tree": "./dist/tree/index.js",
     "./tokens": "./dist/tokens/index.js"
   },

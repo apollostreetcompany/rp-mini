@@ -287,6 +287,48 @@ export class SelectionState {
     }
   }
 
+  async refreshFiles(paths: string[]): Promise<void> {
+    let changed = false;
+    for (const requested of paths) {
+      const normalized = normalizePath(requested);
+      const entry = this.explicitEntries.get(normalized);
+      if (!entry) continue;
+      const file = this.findFile(normalized);
+      if (!file) {
+        this.explicitEntries.delete(normalized);
+        changed = true;
+        continue;
+      }
+      this.explicitEntries.set(
+        normalized,
+        await this.createEntry(file, entry.mode, entry.slices, {
+          storedSha: entry.mode === "slices" ? entry.contentSha256 : undefined,
+          slicesInvalidated: entry.slices_invalidated,
+        }),
+      );
+      changed = true;
+    }
+    if (changed) {
+      await this.recomputeAutoCodemaps();
+      this.recomputeAggregate();
+      await this.save();
+    }
+  }
+
+  async forgetPaths(paths: string[]): Promise<void> {
+    let changed = false;
+    for (const requested of paths) {
+      const normalized = normalizePath(requested);
+      if (this.explicitEntries.delete(normalized)) changed = true;
+      if (this.autoCodemapPaths.delete(normalized)) changed = true;
+    }
+    if (changed) {
+      await this.recomputeAutoCodemaps();
+      this.recomputeAggregate();
+      await this.save();
+    }
+  }
+
   snapshot(): SelectionSnapshot {
     const explicit = [...this.explicitEntries.values()];
     const auto = [...this.autoCodemapPaths]

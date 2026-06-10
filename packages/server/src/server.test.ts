@@ -388,4 +388,211 @@ describe("rp-mini MCP server", () => {
     expect(result.isError).toBe(true);
     expect(firstText(result)).toContain("Input validation error");
   });
+
+  it("serves real apply_edits over linked transport including fuzzy and ambiguity fail-closed", async () => {
+    const root = await tempRoot();
+    await write(
+      join(root, "src", "a.ts"),
+      [
+        "export function calculateTotal(value: number) {",
+        "  return value + 1;",
+        "}",
+        "function duplicate() { return 1; }",
+        "function duplicate() { return 2; }",
+        "",
+      ].join("\n"),
+    );
+    const original = await readFile(join(root, "src", "a.ts"), "utf8");
+    const { client } = await connectedClient({ roots: [root] });
+
+    const fuzzy = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/a.ts",
+        search: [
+          "private function calculateTotel(value:   number) {",
+          "return value + 1;",
+          "}",
+        ].join("\n"),
+        replace: ["function calculateTotal(value: number) {", "  return value + 2;", "}"].join(
+          "\n",
+        ),
+        verbose: true,
+      },
+    });
+    const fuzzyPayload = JSON.parse(firstText(fuzzy)) as {
+      status: string;
+      matched_by: string[];
+      unified_diff: string;
+    };
+    expect(fuzzyPayload.status).toBe("ok");
+    expect(fuzzyPayload.matched_by).toEqual(["fuzzy"]);
+    expect(fuzzyPayload.unified_diff).toContain("+  return value + 2;");
+
+    const afterFuzzy = await readFile(join(root, "src", "a.ts"), "utf8");
+    const ambiguous = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/a.ts",
+        search: "private function duplicate() { return",
+        replace: "function renamed() { return",
+      },
+    });
+    const ambiguousPayload = JSON.parse(firstText(ambiguous)) as {
+      status: string;
+      error: { code: string; candidates: number[] };
+    };
+    expect(ambiguousPayload).toMatchObject({
+      status: "error",
+      error: { code: "ambiguous_match", candidates: [4, 5] },
+    });
+    expect(await readFile(join(root, "src", "a.ts"), "utf8")).toBe(afterFuzzy);
+    expect(afterFuzzy).not.toBe(original);
+  });
+
+  it("serves a transactional 3-edit batch with hand-computed final content", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "batch.txt"), "one\ntwo\nthree\nfour\nfive\n");
+    const { client } = await connectedClient({ roots: [root] });
+
+    const result = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/batch.txt",
+        edits: [
+          { search: "one", replace: "zero\none" },
+          { search: "three\nfour", replace: "THREE" },
+          { search: "five", replace: "FIVE" },
+        ],
+      },
+    });
+    const payload = JSON.parse(firstText(result)) as {
+      status: string;
+      edits_applied: number;
+      matched_by: string[];
+    };
+
+    expect(payload).toMatchObject({
+      status: "ok",
+      edits_applied: 3,
+      matched_by: ["literal", "literal", "literal"],
+    });
+    expect(await readFile(join(root, "src", "batch.txt"), "utf8")).toBe(
+      "zero\none\ntwo\nTHREE\nFIVE\n",
+    );
+  });
+
+  it("updates selection tokens, invalidates stale slices, refreshes codemaps, and handles file_actions", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "a.ts"), "export function before() { return 1; }\n");
+    await write(join(root, "src", "slice.ts"), "one\ntwo\nthree\n");
+    const { client } = await connectedClient({
+      roots: [root],
+      sessionId: "edit-integration",
+      config: { selection: { auto_codemaps: false } },
+    });
+
+    await client.callTool({
+      name: "manage_selection",
+      arguments: { op: "set", mode: "full", paths: ["src/a.ts"], view: "files" },
+    });
+    const before = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "manage_selection",
+          arguments: { op: "get", view: "files" },
+        }),
+      ),
+    ) as { files: Array<{ path: string; tokens: { full: number } }> };
+
+    await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/a.ts",
+        search: "before",
+        replace: "afterAndLongerNameWithEnoughExtraCharactersToChangeTokenCount",
+      },
+    });
+    const after = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "manage_selection",
+          arguments: { op: "get", view: "files" },
+        }),
+      ),
+    ) as { files: Array<{ path: string; tokens: { full: number } }> };
+    expect(after.files[0]!.tokens.full).toBeGreaterThan(before.files[0]!.tokens.full);
+
+    const structure = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "get_code_structure",
+          arguments: { paths: ["src/a.ts"] },
+        }),
+      ),
+    ) as { files: Array<{ text: string }> };
+    expect(structure.files[0]!.text).toContain("afterAndLongerName");
+    expect(structure.files[0]!.text).not.toContain("before");
+
+    await client.callTool({
+      name: "manage_selection",
+      arguments: {
+        op: "set",
+        mode: "slices",
+        slices: [{ path: "src/slice.ts", ranges: [{ start_line: 2, end_line: 2 }] }],
+      },
+    });
+    await client.callTool({
+      name: "apply_edits",
+      arguments: { path: "src/slice.ts", search: "two", replace: "changed" },
+    });
+    const sliced = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "manage_selection",
+          arguments: { op: "get", view: "files" },
+        }),
+      ),
+    ) as { files: Array<{ path: string; mode: string; slices_invalidated?: boolean }> };
+    expect(sliced.files.find((file) => file.path === "src/slice.ts")).toMatchObject({
+      mode: "full",
+      slices_invalidated: true,
+    });
+
+    const created = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "file_actions",
+          arguments: { action: "create", path: "src/new.txt", content: "new\n" },
+        }),
+      ),
+    );
+    expect(created).toMatchObject({ status: "ok", file_created: true });
+    const outside = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "file_actions",
+          arguments: { action: "create", path: "../outside.txt", content: "x" },
+        }),
+      ),
+    );
+    expect(outside).toMatchObject({ status: "error", error: { code: "outside_workspace" } });
+    await client.callTool({
+      name: "manage_selection",
+      arguments: { op: "set", mode: "full", paths: ["src/new.txt"] },
+    });
+    await client.callTool({
+      name: "file_actions",
+      arguments: { action: "delete", path: "src/new.txt" },
+    });
+    const files = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "manage_selection",
+          arguments: { op: "get", view: "files" },
+        }),
+      ),
+    ) as { files: Array<{ path: string }> };
+    expect(files.files.map((file) => file.path)).not.toContain("src/new.txt");
+  });
 });

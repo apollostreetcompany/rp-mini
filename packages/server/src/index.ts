@@ -2,6 +2,8 @@ import {
   defaultConfig,
   assemblePayload,
   buildReceipt,
+  applyFileEdits,
+  fileAction,
   generateFileTree,
   getCodeStructures,
   getCatalog,
@@ -194,11 +196,15 @@ const toolDefinitions: ToolDefinition[] = [
               .object({
                 search: z.string().min(1),
                 replace: z.string(),
+                all: z.boolean().default(false),
               })
               .strict(),
           )
           .optional(),
         rewrite: z.string().optional(),
+        all: z.boolean().default(false),
+        on_missing: z.enum(["error", "create"]).default("error"),
+        verbose: z.boolean().default(false),
       })
       .strict()
       .refine(
@@ -223,13 +229,18 @@ const toolDefinitions: ToolDefinition[] = [
     enabled: (config) => config.tools.file_actions,
     inputSchema: z
       .object({
-        op: z.enum(["create", "delete", "move"]),
+        action: z.enum(["create", "delete", "move"]).optional(),
+        op: z.enum(["create", "delete", "move"]).optional(),
         path: z.string().min(1),
         content: z.string().optional(),
+        new_path: z.string().min(1).optional(),
         destination: z.string().min(1).optional(),
-        if_exists: z.enum(["error", "overwrite", "skip"]).default("error"),
+        if_exists: z.enum(["error", "overwrite"]).default("error"),
       })
-      .strict(),
+      .strict()
+      .refine((args) => args.action !== undefined || args.op !== undefined, {
+        message: "action is required.",
+      }),
   },
   {
     name: "git",
@@ -355,6 +366,82 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
       const catalog = await getCatalog(config.roots, config);
       const state = await selectionState(context, catalog);
       return handlePrompt(state, args);
+    }
+    case "apply_edits": {
+      const editArgs = args as {
+        path: string;
+        search?: string;
+        replace?: string;
+        all?: boolean;
+        edits?: Array<{ search: string; replace: string; all?: boolean }>;
+        rewrite?: string;
+        on_missing?: "error" | "create";
+        verbose?: boolean;
+      };
+      const result = await applyFileEdits({
+        roots: config.roots,
+        config,
+        path: editArgs.path,
+        search: editArgs.search,
+        replace: editArgs.replace,
+        all: editArgs.all,
+        edits: editArgs.edits,
+        rewrite: editArgs.rewrite,
+        on_missing: editArgs.on_missing,
+        verbose: editArgs.verbose,
+      });
+      if (result.status === "ok" && context.stateRef.state) {
+        const catalog = await getCatalog(config.roots, config);
+        context.stateRef.state.updateCatalog(catalog);
+        await context.stateRef.state.refreshFiles([result.path]);
+      }
+      return result;
+    }
+    case "file_actions": {
+      const actionArgs = args as {
+        action?: "create" | "delete" | "move";
+        op?: "create" | "delete" | "move";
+        path: string;
+        content?: string;
+        new_path?: string;
+        destination?: string;
+        if_exists?: "error" | "overwrite";
+      };
+      const action = actionArgs.action ?? actionArgs.op ?? "create";
+      const beforeSnapshot = context.stateRef.state?.snapshot();
+      const selectedBefore = beforeSnapshot?.entries.find(
+        (entry) => entry.path === actionArgs.path,
+      );
+      const result = await fileAction({
+        roots: config.roots,
+        config,
+        action,
+        path: actionArgs.path,
+        content: actionArgs.content,
+        new_path: actionArgs.new_path ?? actionArgs.destination,
+        if_exists: actionArgs.if_exists,
+      });
+      if (result.status === "ok" && context.stateRef.state) {
+        const catalog = await getCatalog(config.roots, config);
+        context.stateRef.state.updateCatalog(catalog);
+        if (action === "delete") {
+          await context.stateRef.state.forgetPaths([actionArgs.path]);
+        } else if (action === "move") {
+          await context.stateRef.state.forgetPaths([actionArgs.path]);
+          if (selectedBefore) {
+            await context.stateRef.state.add([
+              {
+                path: result.path,
+                mode: selectedBefore.mode,
+                slices: selectedBefore.slices,
+              },
+            ]);
+          }
+        } else {
+          await context.stateRef.state.refreshFiles([result.path]);
+        }
+      }
+      return result;
     }
     default:
       return { status: "not_implemented", tool: name, parsed_args: args };
