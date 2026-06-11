@@ -18,8 +18,9 @@ If a shell is available and no MCP client is loaded, use `node packages/server/d
    - response_type: `review`
    - enhancement mode: `rewrite` unless the user requested `augment` or `preserve`
 4. If the review identifies concrete work, rerun `context-builder` with response_type: `plan` for the chosen refactor.
-5. Act on the handoff: implement scoped improvements only, one logical change at a time.
-6. Validate behavior with existing and targeted tests; broaden tests if shared contracts changed.
-7. Report what changed, what stayed intentionally unchanged, validations, and residual risk.
+5. If the builder returns `<questions>`, follow the question loop defined in rp-build/rp-investigate before continuing.
+6. Act on the handoff: implement scoped improvements only, one logical change at a time.
+7. Validate behavior with existing and targeted tests; broaden tests if shared contracts changed.
+8. Report what changed, what stayed intentionally unchanged, validations, and residual risk.
 
 Do not use refactor as a vehicle for unrelated cleanup.

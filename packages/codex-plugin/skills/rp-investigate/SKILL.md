@@ -19,9 +19,10 @@ Triage fast path: Bounded question (single subsystem, named symbol, roughly <=5 
    - budget: default discovery budget unless caller supplied a hard budget
    - response_type: `question`
    - enhancement mode: `rewrite` unless the user requested `augment` or `preserve`
-4. Pursue evidence from the handoff: read selected files, inspect git history or diffs when relevant, and verify claims with file:line references.
-5. Refine selection only when evidence shows the builder missed needed context; bias toward adding, not clearing, selection.
-6. Finish with a `workspace_context op=export` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
-7. Report findings as evidence, inference, unknowns, and next recommended action.
+4. Question loop: this is the rp-build/rp-investigate question loop. If the builder returns `<questions>` plus a saved profile name, read the cited files, check git history or searches, and answer only conclusive questions with `<answer key="..." source="orchestrator" >...</answer>`. Escalate only for blocking AND high-stakes questions: irreversible/destructive actions, product policy, money/auth/data-loss; present numbered options in chat and wait. Append `<answers>` with `prompt op=append`, resume with `manage_selection op=load_profile`, and remember advisory questions never interrupt.
+5. Pursue evidence from the handoff: read selected files, inspect git history or diffs when relevant, and verify claims with file:line references.
+6. Refine selection only when evidence shows the builder missed needed context; bias toward adding, not clearing, selection.
+7. Finish with a `workspace_context op=export` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
+8. Report findings as evidence, inference, unknowns, and next recommended action.
 
 Do not change source files in this workflow.
