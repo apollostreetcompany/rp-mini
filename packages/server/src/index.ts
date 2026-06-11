@@ -24,6 +24,7 @@ import {
   type Config,
   type DeepPartial,
   type FileCatalog,
+  type RoleProfile,
   type SelectionMode,
   type SelectionSlice,
   type SelectionSnapshot,
@@ -43,9 +44,12 @@ export interface RpMiniServerOptions {
 export type ToolDefinition = {
   name: string;
   description: string;
+  family: ToolFamily;
   inputSchema: z.ZodTypeAny;
   enabled?: (config: Config) => boolean;
 };
+
+export type ToolFamily = "discovery" | "selection" | "mutation" | "git";
 
 const positiveInt = z.number().int().positive();
 const treeTokenCap = positiveInt.max(50_000);
@@ -59,6 +63,7 @@ const rootArg = z
 export const toolDefinitions: ToolDefinition[] = [
   {
     name: "file_search",
+    family: "discovery",
     description:
       "Search files by path, content, or both. Defaults to mode=auto, max_results=50, response caps with limit_hit semantics. Optional root targets another absolute workspace root.",
     inputSchema: z
@@ -83,6 +88,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "read_file",
+    family: "discovery",
     description:
       "Read one file by path with optional start_line, negative tail offsets, and line limit; returns range metadata. Optional root targets another workspace root.",
     inputSchema: z
@@ -96,6 +102,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "get_file_tree",
+    family: "discovery",
     description:
       "Render workspace tree in auto/full/folders/selected mode, with max_depth and max_tokens auto target caps. Optional root targets another workspace root.",
     inputSchema: z
@@ -110,6 +117,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "get_code_structure",
+    family: "discovery",
     description:
       "Return codemap text for explicit paths or selected scope, max_results default 10 and structure token cap. Optional root targets another workspace root.",
     inputSchema: z
@@ -126,6 +134,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "manage_selection",
+    family: "selection",
     description:
       "Manage context selection: get/add/remove/set/clear/promote/demote with full, slices, or codemap_only modes. Optional root targets another workspace root.",
     inputSchema: z
@@ -172,6 +181,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "workspace_context",
+    family: "selection",
     description:
       "Snapshot or export prompt, selection, code, files, tree, and token breakdown for budget checks. Optional root targets another workspace root.",
     inputSchema: z
@@ -190,6 +200,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "prompt",
+    family: "selection",
     description:
       "Get, set, append, or clear curated handoff instructions stored with the selection. Optional root targets another workspace root.",
     inputSchema: z
@@ -205,6 +216,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "apply_edits",
+    family: "mutation",
     description:
       "Preview or apply rewrite, single search/replace, or edits[] using the edit ladder; dry_run returns a diff and pre_sha256, expected_sha256 gates real writes. Optional root targets another workspace root.",
     enabled: (config) => config.tools.apply_edits,
@@ -253,6 +265,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "file_actions",
+    family: "mutation",
     description:
       "Create, delete, or move files with if_exists guard; delete/move support expected_sha256 freshness. Optional root targets another workspace root.",
     enabled: (config) => config.tools.file_actions,
@@ -278,6 +291,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: "git",
+    family: "git",
     description:
       "Read-only git status/diff/log/show/blame with compare specs, detail levels, structured hunks, and safe flags. Optional root targets another workspace root.",
     enabled: (config) => config.tools.git,
@@ -307,18 +321,22 @@ export function createRpMiniServer(options: RpMiniServerOptions = {}): McpServer
     sessionId: options.sessionId,
     now,
   });
-  const server = new McpServer({ name: "rp-mini", version: "0.0.0" });
+  const server = new McpServer(
+    { name: "rp-mini", version: "0.0.0" },
+    { instructions: serverInstructions(config) },
+  );
 
   for (const definition of toolDefinitions) {
-    if (definition.enabled && !definition.enabled(config)) continue;
     server.registerTool(
       definition.name,
       {
         description: definition.description,
         inputSchema: definition.inputSchema,
       },
-      async (args) =>
-        toolResponse(await handleTool(definition.name, args, await resolveContext(args))),
+      async (args) => {
+        const context = await resolveContext(args);
+        return toolResponse(await dispatchTool(definition, args, context));
+      },
     );
   }
 
@@ -336,9 +354,6 @@ export async function runRpMiniTool(
   if (!definition) {
     throw new Error(`Unknown tool: ${name}`);
   }
-  if (definition.enabled && !definition.enabled(config)) {
-    throw new Error(`Tool disabled by config: ${name}`);
-  }
   const parsed = definition.inputSchema.parse(args);
   const resolveContext = createContextResolver({
     config,
@@ -346,7 +361,7 @@ export async function runRpMiniTool(
     sessionId: options.sessionId,
     now: options.now ?? (() => new Date()),
   });
-  return handleTool(name, parsed, await resolveContext(parsed));
+  return dispatchTool(definition, parsed, await resolveContext(parsed));
 }
 
 interface HandlerContext {
@@ -354,7 +369,7 @@ interface HandlerContext {
   stateRef: { state?: SelectionState };
   sessionId?: string;
   now: () => Date;
-  error?: { code: RootTargetError; message: string };
+  error?: { code: RootTargetError; message: string; profile?: RoleProfile };
 }
 
 type RootTargetError =
@@ -366,6 +381,108 @@ type RootTargetError =
 interface DynamicRootContext {
   config: Config;
   stateRef: { state?: SelectionState };
+}
+
+type DisabledToolError = {
+  code: "tool_disabled_by_profile" | "tool_disabled_by_config";
+  profile: RoleProfile;
+  tool: string;
+  message: string;
+};
+
+type ToolStatus = {
+  name: string;
+  enabled: boolean;
+  reason?: string;
+};
+
+function disabledToolError(
+  definition: ToolDefinition,
+  config: Config,
+): DisabledToolError | undefined {
+  const configReason = configDisabledReason(definition, config);
+  if (configReason) {
+    return {
+      code: "tool_disabled_by_config",
+      profile: config.profile,
+      tool: definition.name,
+      message: `Tool "${definition.name}" is disabled by ${configReason}.`,
+    };
+  }
+  if (!profileAllowsTool(config.profile, definition)) {
+    return {
+      code: "tool_disabled_by_profile",
+      profile: config.profile,
+      tool: definition.name,
+      message: `Tool "${definition.name}" is disabled by profile "${config.profile}".`,
+    };
+  }
+  return undefined;
+}
+
+function configDisabledReason(definition: ToolDefinition, config: Config): string | undefined {
+  if (!definition.enabled || definition.enabled(config)) return undefined;
+  if (definition.name === "apply_edits") return "tools.apply_edits=false";
+  if (definition.name === "file_actions") return "tools.file_actions=false";
+  if (definition.name === "git") return "tools.git=false";
+  return "tool config";
+}
+
+function profileAllowsTool(profile: RoleProfile, definition: ToolDefinition): boolean {
+  if (profile === "explorer") return definition.family !== "mutation";
+  return true;
+}
+
+function toolStatuses(config: Config): ToolStatus[] {
+  return toolDefinitions.map((definition) => {
+    const configReason = configDisabledReason(definition, config);
+    if (configReason)
+      return { name: definition.name, enabled: false, reason: `disabled by ${configReason}` };
+    if (!profileAllowsTool(config.profile, definition)) {
+      return {
+        name: definition.name,
+        enabled: false,
+        reason: `disabled by profile "${config.profile}"`,
+      };
+    }
+    return { name: definition.name, enabled: true };
+  });
+}
+
+function serverPolicy(config: Config): {
+  profile: RoleProfile;
+  tools_enabled: string[];
+  tools_disabled: Array<{ name: string; reason: string }>;
+} {
+  const statuses = toolStatuses(config);
+  return {
+    profile: config.profile,
+    tools_enabled: statuses.filter((tool) => tool.enabled).map((tool) => tool.name),
+    tools_disabled: statuses
+      .filter((tool): tool is ToolStatus & { reason: string } => !tool.enabled && !!tool.reason)
+      .map((tool) => ({ name: tool.name, reason: tool.reason })),
+  };
+}
+
+function serverInstructions(config: Config): string {
+  const policy = serverPolicy(config);
+  const enabled = policy.tools_enabled.length > 0 ? policy.tools_enabled.join(", ") : "none";
+  const disabled =
+    policy.tools_disabled.length > 0
+      ? policy.tools_disabled.map((tool) => `${tool.name} - ${tool.reason}`).join(", ")
+      : "none";
+  const rootNote =
+    config.profile === "explorer"
+      ? 'Dynamic root targeting is disabled by profile "explorer".'
+      : "Dynamic root targeting follows dynamic_roots config.";
+  return [
+    "rp-mini role profile policy",
+    `profile: ${config.profile}`,
+    `enabled tools: ${enabled}`,
+    `disabled tools: ${disabled}`,
+    rootNote,
+    "Disabled tools remain listed and return structured error payloads.",
+  ].join("\n");
 }
 
 function createContextResolver(
@@ -395,9 +512,12 @@ function createContextResolver(
       return { ...primary, ...existing };
     }
 
+    const loaded = await loadConfig(realRoot, { roots: [realRoot] });
     const context = {
-      // Matches CLI `tool <workspace>` dispatch so each targeted workspace reads its own config.
-      config: await loadConfig(realRoot, { roots: [realRoot] }),
+      // Matches CLI `tool <workspace>` dispatch so each targeted workspace reads its own config,
+      // except profile: the process profile clamps every context and cannot be escaped by a
+      // target workspace's own rp-mini.config.json.
+      config: { ...loaded, profile: primary.config.profile },
       stateRef: {},
     };
     dynamicContexts.set(realRoot, context);
@@ -409,6 +529,17 @@ function createContextResolver(
     }
     return { ...primary, ...context };
   };
+}
+
+async function dispatchTool(
+  definition: ToolDefinition,
+  args: unknown,
+  context: HandlerContext,
+): Promise<unknown> {
+  if (context.error) return { error: context.error };
+  const disabled = disabledToolError(definition, context.config);
+  if (disabled) return { error: disabled };
+  return handleTool(definition.name, args, context);
 }
 
 function rootFromArgs(args: unknown): string | undefined {
@@ -862,6 +993,7 @@ async function workspaceContext(
   });
   const response: Record<string, unknown> = {
     content_hash: payload.contentHash,
+    server: serverPolicy(config),
     sections: Object.fromEntries(payload.sections.map((section) => [section.name, section.text])),
     tokens: payload.tokenBreakdown,
     total_tokens: payload.tokenBreakdown.total,

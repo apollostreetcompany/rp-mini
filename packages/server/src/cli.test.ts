@@ -13,6 +13,22 @@ async function tempRoot(): Promise<string> {
   return path;
 }
 
+async function expectCliFailure(
+  args: string[],
+  cwd: string,
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    await execFileAsync("node", [join(process.cwd(), "packages/server/dist/cli.js"), ...args], {
+      cwd,
+    });
+  } catch (error) {
+    const failed = error as { stdout?: string; stderr?: string; code?: number };
+    expect(failed.code).not.toBe(0);
+    return { stdout: failed.stdout ?? "", stderr: failed.stderr ?? "" };
+  }
+  throw new Error("Expected CLI command to fail.");
+}
+
 describe("rp-mini index CLI", () => {
   it("prints help with shell wrappers and MCP tool escape hatch", async () => {
     const result = await execFileAsync("node", [
@@ -21,8 +37,10 @@ describe("rp-mini index CLI", () => {
     ]);
 
     expect(result.stdout).toContain("rp-mini search <root> <pattern>");
+    expect(result.stdout).toContain("rp-mini serve [--profile full|editor|explorer]");
     expect(result.stdout).toContain("rp-mini read <root> <path>");
     expect(result.stdout).toContain("rp-mini tool <root> <tool-name>");
+    expect(result.stdout).toContain("[--profile full|editor|explorer]");
     expect(result.stdout).toContain("file_search");
     expect(result.stdout).toContain("workspace_context");
   });
@@ -178,5 +196,86 @@ describe("rp-mini index CLI", () => {
       { path: "app.ts", mode: "full", slices: [], auto: false },
     ]);
     expect(snapshot.total_tokens).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("applies CLI profile overrides above env for tool dispatch", async () => {
+    const root = await tempRoot();
+    await writeFile(join(root, "app.ts"), "export const app = 1;\n");
+    const cli = join(process.cwd(), "packages/server/dist/cli.js");
+
+    const context = await execFileAsync(
+      "node",
+      [
+        cli,
+        "tool",
+        root,
+        "workspace_context",
+        "--profile",
+        "full",
+        "--json-args",
+        JSON.stringify({ op: "snapshot", include: ["selection", "tokens"] }),
+      ],
+      { cwd: root, env: { ...process.env, RP_MINI_PROFILE: "explorer" } },
+    );
+
+    const snapshot = JSON.parse(context.stdout) as { server: { profile: string } };
+    expect(snapshot.server.profile).toBe("full");
+  }, 60_000);
+
+  it("prints structured disabled errors on stdout and exits non-zero for generic tool calls", async () => {
+    const root = await tempRoot();
+    await writeFile(join(root, "app.ts"), "one\n");
+
+    const failed = await expectCliFailure(
+      [
+        "tool",
+        root,
+        "apply_edits",
+        "--profile",
+        "explorer",
+        "--json-args",
+        JSON.stringify({ path: "app.ts", search: "one", replace: "ONE", dry_run: true }),
+      ],
+      root,
+    );
+
+    expect(failed.stderr).toBe("");
+    expect(JSON.parse(failed.stdout)).toMatchObject({
+      error: {
+        code: "tool_disabled_by_profile",
+        profile: "explorer",
+        tool: "apply_edits",
+      },
+    });
+  }, 60_000);
+
+  it("prints structured disabled errors on stdout and exits non-zero for edit wrapper calls", async () => {
+    const root = await tempRoot();
+    await writeFile(join(root, "app.ts"), "one\n");
+
+    const failed = await expectCliFailure(
+      [
+        "edit",
+        root,
+        "app.ts",
+        "--profile",
+        "explorer",
+        "--search",
+        "one",
+        "--replace",
+        "ONE",
+        "--json",
+      ],
+      root,
+    );
+
+    expect(failed.stderr).toBe("");
+    expect(JSON.parse(failed.stdout)).toMatchObject({
+      error: {
+        code: "tool_disabled_by_profile",
+        profile: "explorer",
+        tool: "apply_edits",
+      },
+    });
   }, 60_000);
 });

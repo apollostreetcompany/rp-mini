@@ -30,6 +30,10 @@ function firstText(result: unknown): string {
   return content[0].text;
 }
 
+function payload(result: unknown): unknown {
+  return JSON.parse(firstText(result));
+}
+
 async function tempRoot(): Promise<string> {
   const path = join(tmpdir(), `rp-mini-server-${crypto.randomUUID()}`);
   await mkdir(path, { recursive: true });
@@ -82,12 +86,136 @@ describe("rp-mini MCP server", () => {
     );
   });
 
-  it("omits tools disabled in config", async () => {
+  it("keeps config-disabled tools visible and returns typed disabled errors", async () => {
     const { client } = await connectedClient({ config: { tools: { apply_edits: false } } });
     const result = await client.listTools();
 
-    expect(result.tools.map((tool) => tool.name)).not.toContain("apply_edits");
-    expect(result.tools).toHaveLength(9);
+    expect(result.tools.map((tool) => tool.name)).toContain("apply_edits");
+    expect(result.tools).toHaveLength(10);
+
+    const disabled = await client.callTool({
+      name: "apply_edits",
+      arguments: { path: "src/a.ts", search: "a", replace: "b" },
+    });
+    expect(payload(disabled)).toEqual({
+      error: {
+        code: "tool_disabled_by_config",
+        profile: "full",
+        tool: "apply_edits",
+        message: 'Tool "apply_edits" is disabled by tools.apply_edits=false.',
+      },
+    });
+  });
+
+  it("reports active profile and tool policy in MCP instructions", async () => {
+    const { client } = await connectedClient({
+      config: { profile: "explorer", tools: { git: false } },
+    });
+
+    const instructions = client.getInstructions() ?? "";
+
+    expect(instructions).toContain("profile: explorer");
+    expect(instructions).toContain("enabled tools:");
+    expect(instructions).toContain("disabled tools:");
+    expect(instructions).toContain('apply_edits - disabled by profile "explorer"');
+    expect(instructions).toContain("git - disabled by tools.git=false");
+  });
+
+  it("clamps mutation tools under explorer while keeping read-only tools and git available", async () => {
+    const root = await initGitFixture();
+    const { client } = await connectedClient({
+      roots: [root],
+      config: { profile: "explorer", tools: { apply_edits: true, file_actions: true, git: true } },
+    });
+    const listed = await client.listTools();
+
+    expect(listed.tools.map((tool) => tool.name)).toContain("apply_edits");
+    expect(
+      payload(await client.callTool({ name: "git", arguments: { op: "status" } })),
+    ).toHaveProperty("files");
+    expect(
+      payload(
+        await client.callTool({
+          name: "file_search",
+          arguments: { pattern: "one", mode: "content" },
+        }),
+      ),
+    ).toHaveProperty("matches");
+    expect(
+      payload(
+        await client.callTool({
+          name: "apply_edits",
+          arguments: { path: "src/a.ts", search: "one", replace: "ONE", dry_run: true },
+        }),
+      ),
+    ).toEqual({
+      error: {
+        code: "tool_disabled_by_profile",
+        profile: "explorer",
+        tool: "apply_edits",
+        message: 'Tool "apply_edits" is disabled by profile "explorer".',
+      },
+    });
+    expect(
+      payload(
+        await client.callTool({
+          name: "file_actions",
+          arguments: { action: "create", path: "src/new.ts", content: "new\n" },
+        }),
+      ),
+    ).toMatchObject({
+      error: { code: "tool_disabled_by_profile", profile: "explorer", tool: "file_actions" },
+    });
+  });
+
+  it("treats editor as a distinct full-surface profile today", async () => {
+    const root = await initGitFixture();
+    const { client } = await connectedClient({ roots: [root], config: { profile: "editor" } });
+
+    expect(
+      payload(await client.callTool({ name: "git", arguments: { op: "status" } })),
+    ).toHaveProperty("files");
+    expect(
+      payload(
+        await client.callTool({
+          name: "apply_edits",
+          arguments: { path: "src/a.ts", search: "one", replace: "ONE", dry_run: true },
+        }),
+      ),
+    ).toMatchObject({ status: "previewed" });
+  });
+
+  it("reports disabled profile/config reasons in workspace_context server snapshot", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "a.ts"), "export const a = 1;\n");
+    const { client } = await connectedClient({
+      roots: [root],
+      config: { profile: "explorer", tools: { git: false, apply_edits: true } },
+    });
+
+    const result = await client.callTool({
+      name: "workspace_context",
+      arguments: { op: "snapshot", include: ["selection", "tokens"] },
+    });
+    const snapshot = payload(result) as {
+      server: {
+        profile: string;
+        tools_enabled: string[];
+        tools_disabled: Array<{ name: string; reason: string }>;
+      };
+    };
+
+    expect(snapshot.server.profile).toBe("explorer");
+    expect(snapshot.server.tools_enabled).toEqual(
+      expect.arrayContaining(["file_search", "read_file"]),
+    );
+    expect(snapshot.server.tools_disabled).toEqual(
+      expect.arrayContaining([
+        { name: "apply_edits", reason: 'disabled by profile "explorer"' },
+        { name: "file_actions", reason: 'disabled by profile "explorer"' },
+        { name: "git", reason: "disabled by tools.git=false" },
+      ]),
+    );
   });
 
   it("serves real file_search over the linked transport", async () => {
@@ -320,11 +448,23 @@ describe("rp-mini MCP server", () => {
       content_hash: string;
       sections: Record<string, string>;
       tokens: { total: number };
+      server: {
+        profile: string;
+        tools_enabled: string[];
+        tools_disabled: Array<{ name: string; reason: string }>;
+      };
     };
     const secondPayload = JSON.parse(firstText(secondSnapshot)) as { content_hash: string };
     expect(firstPayload.content_hash).toBe(secondPayload.content_hash);
     expect(firstPayload.sections.user_instructions).toContain("handoff text");
     expect(firstPayload.tokens.total).toBeGreaterThan(0);
+    expect(firstPayload.server).toMatchObject({
+      profile: "full",
+      tools_disabled: [],
+    });
+    expect(firstPayload.server.tools_enabled).toEqual(
+      expect.arrayContaining(["file_search", "apply_edits", "file_actions", "git"]),
+    );
 
     await client.callTool({
       name: "manage_selection",
