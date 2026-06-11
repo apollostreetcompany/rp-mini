@@ -124,6 +124,48 @@ describe("dynamic MCP roots", () => {
     ).toContain("src/b.ts");
   });
 
+  it("applies dry_run and expected_sha256 through an explicit dynamic root", async () => {
+    const tempA = await tempRoot();
+    const tempB = await tempRoot();
+    await write(join(tempA, "src", "only-a.txt"), "alpha\n");
+    await write(join(tempB, "src", "only-b.txt"), "one\ntwo\nthree\n");
+    const { client } = await connectedClient({ roots: [tempA] });
+
+    const preview = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        root: tempB,
+        path: "src/only-b.txt",
+        search: "two",
+        replace: "TWO",
+        dry_run: true,
+      },
+    });
+    const previewPayload = JSON.parse(firstText(preview)) as {
+      status: string;
+      pre_sha256: string;
+    };
+    expect(previewPayload.status).toBe("previewed");
+    expect(await readFile(join(tempB, "src", "only-b.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+
+    const applied = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        root: tempB,
+        path: "src/only-b.txt",
+        search: "two",
+        replace: "TWO",
+        expected_sha256: previewPayload.pre_sha256,
+      },
+    });
+    expect(JSON.parse(firstText(applied))).toMatchObject({
+      status: "applied",
+      verified: true,
+    });
+    expect(await readFile(join(tempB, "src", "only-b.txt"), "utf8")).toBe("one\nTWO\nthree\n");
+    expect(await readFile(join(tempA, "src", "only-a.txt"), "utf8")).toBe("alpha\n");
+  });
+
   it("returns structured errors for invalid or disabled dynamic roots", async () => {
     const tempA = await tempRoot();
     const missing = join(tempA, "missing");
