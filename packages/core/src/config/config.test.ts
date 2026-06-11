@@ -48,6 +48,7 @@ describe("loadConfig", () => {
         env: {
           RP_MINI_BUDGETS_PLAN: "300",
           RP_MINI_TOOLS_GIT: "true",
+          RP_MINI_CONCURRENCY_HYDRATE: "7",
           RP_MINI_DAEMON_KEEP_ALIVE: "true",
           RP_MINI_ROOTS: ".,../other",
         },
@@ -62,6 +63,7 @@ describe("loadConfig", () => {
       git: true,
     });
     expect(config.concurrency.search_max).toBe(9);
+    expect(config.concurrency.hydrate).toBe(7);
     expect(config.daemon.keep_alive).toBe(true);
     expect(config.roots).toEqual([".", "../other"]);
     expect(config.presets.standard).toBeDefined();

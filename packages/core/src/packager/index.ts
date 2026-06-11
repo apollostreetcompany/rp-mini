@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import type { FileCatalog } from "../catalog/index.js";
+import type { CatalogFile, FileCatalog } from "../catalog/index.js";
 import { getCodeStructures, languageForPath } from "../codemaps/index.js";
 import type { Config, PresetConfig } from "../config/index.js";
 import type { SelectionEntry, SelectionSnapshot } from "../selection/index.js";
@@ -149,7 +149,9 @@ export async function assemblePayload(
   const fileMap = await buildFileMap(snapshot, config, opts, preset.config);
   if (fileMap) snippets.set("file_map", `<file_map>\n${fileMap}\n</file_map>\n`);
 
-  const fileContents = preset.config.include_files ? await buildFileContents(snapshot, opts) : "";
+  const fileContents = preset.config.include_files
+    ? await buildFileContents(snapshot, config, opts)
+    : "";
   if (fileContents)
     snippets.set("file_contents", `<file_contents>\n${fileContents}\n</file_contents>\n`);
 
@@ -237,13 +239,24 @@ async function buildFileMap(
 
 async function buildFileContents(
   snapshot: SelectionSnapshot,
+  config: Config,
   opts: PackagerOptions,
 ): Promise<string> {
-  const blocks: string[] = [];
-  for (const entry of snapshot.entries
+  const entries = snapshot.entries
     .filter((item) => item.mode !== "codemap")
-    .sort((a, b) => a.path.localeCompare(b.path))) {
-    const content = await readSelectionFile(entry.path, opts);
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const resolved = entries.map((entry) => resolveSelectionFile(entry, opts));
+  const hydrated = await mapConcurrent(
+    resolved,
+    config.concurrency.hydrate,
+    async ({ entry, file }) => ({
+      entry,
+      content: await readSelectionFile(entry.path, file, opts),
+    }),
+  );
+
+  const blocks: string[] = [];
+  for (const { entry, content } of hydrated) {
     const language = fenceLanguage(entry.path);
     if (entry.mode === "full") {
       blocks.push(`File: ${entry.path}\n\`\`\`${language}\n${content.trimEnd()}\n\`\`\``);
@@ -304,13 +317,48 @@ function codemapEntries(
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function readSelectionFile(path: string, opts: PackagerOptions): Promise<string> {
-  if (opts.readFile) return opts.readFile(path);
+function resolveSelectionFile(
+  entry: SelectionEntry,
+  opts: PackagerOptions,
+): {
+  entry: SelectionEntry;
+  file: CatalogFile;
+} {
   const file = opts.catalog.roots
     .flatMap((root) => root.files)
-    .find((entry) => entry.relativePath === path);
-  if (!file) throw new Error(`Selected file not found: ${path}`);
+    .find((item) => item.relativePath === entry.path);
+  if (!file) throw new Error(`Selected file not found: ${entry.path}`);
+  return { entry, file };
+}
+
+async function readSelectionFile(
+  path: string,
+  file: CatalogFile,
+  opts: PackagerOptions,
+): Promise<string> {
+  if (opts.readFile) return opts.readFile(path);
   return readFile(file.absolutePath, "utf8");
+}
+
+async function mapConcurrent<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const limit = Math.max(1, Math.floor(concurrency));
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 async function codemapTextFor(catalog: FileCatalog, config: Config, path: string): Promise<string> {
