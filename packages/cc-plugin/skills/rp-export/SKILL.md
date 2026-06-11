@@ -16,10 +16,11 @@ If a shell is available and no MCP client is loaded, use `node packages/server/d
    - budget: caller budget or default discovery budget
    - response_type: `question` for evidence exports, `plan` for planning exports, or `review` for diff exports
    - enhancement mode: `preserve` when the user wants selection-only export; otherwise `rewrite`
-3. Inspect the resulting selection and token count with `workspace_context include=["selection","tokens"]`.
-4. Export with `workspace_context op=export`, choosing the matching preset when provided (`standard`, `plan`, `review`, or `diff-followup`).
-5. Hand the payload path and receipt path to the user. Mention that the payload is compatible with proconsult-style external model intake.
-6. Cite the `workspace_context op=export` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
-7. Report selected scope, token count, preset, assumptions, and any files deliberately excluded.
+3. If the builder returns `<questions>`, follow the question loop defined in rp-build/rp-investigate before continuing.
+4. Inspect the resulting selection and token count with `workspace_context include=["selection","tokens"]`.
+5. Export with `workspace_context op=export`, choosing the matching preset when provided (`standard`, `plan`, `review`, or `diff-followup`).
+6. Hand the payload path and receipt path to the user. Mention that the payload is compatible with proconsult-style external model intake.
+7. Cite the `workspace_context op=export` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
+8. Report selected scope, token count, preset, assumptions, and any files deliberately excluded.
 
 Do not paste large exported payloads into chat; provide paths and receipt details.
