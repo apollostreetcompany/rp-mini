@@ -134,6 +134,113 @@ describe("rp-mini MCP server", () => {
     expect(firstText(tree)).toContain("src");
   });
 
+  it("serves batched read_file with invalid path collection over the linked transport", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "a.ts"), "a1\na2\na3\n");
+    await write(join(root, "src", "b.ts"), "b1\nb2\nb3\n");
+    await write(join(root, "src", "c.ts"), "c1\nc2\nc3\n");
+    const { client } = await connectedClient({ roots: [root] });
+
+    const single = await client.callTool({
+      name: "read_file",
+      arguments: { path: "src/a.ts", start_line: 2, limit: 1 },
+    });
+    expect(JSON.parse(firstText(single))).toEqual({
+      content: "a2\n",
+      totalLines: 3,
+      firstLine: 2,
+      lastLine: 2,
+    });
+
+    const batch = await client.callTool({
+      name: "read_file",
+      arguments: {
+        paths: ["src/b.ts", "missing.ts", "src/a.ts", "src/c.ts"],
+        start_line: 2,
+        limit: 1,
+      },
+    });
+    const payload = JSON.parse(firstText(batch)) as {
+      files: Array<{ path: string; content: string; firstLine: number; lastLine: number }>;
+      invalid_paths: string[];
+      limit_hit: boolean;
+    };
+
+    expect(payload.invalid_paths).toEqual(["missing.ts"]);
+    expect(payload.limit_hit).toBe(false);
+    expect(
+      payload.files.map((file) => [file.path, file.content, file.firstLine, file.lastLine]),
+    ).toEqual([
+      ["src/b.ts", "b2\n", 2, 2],
+      ["src/a.ts", "a2\n", 2, 2],
+      ["src/c.ts", "c2\n", 2, 2],
+    ]);
+  });
+
+  it("rejects read_file path and paths mutual-exclusion violations", async () => {
+    const { client } = await connectedClient();
+
+    const both = await client.callTool({
+      name: "read_file",
+      arguments: { path: "a.ts", paths: ["b.ts"] },
+    });
+    expect(firstText(both)).toContain("Provide exactly one of path or paths.");
+
+    const neither = await client.callTool({ name: "read_file", arguments: {} });
+    expect(firstText(neither)).toContain("Provide exactly one of path or paths.");
+  });
+
+  it("caps batched read_file responses with a fair per-file share", async () => {
+    const root = await tempRoot();
+    await write(join(root, "a.txt"), `${"a".repeat(40)}\n`);
+    await write(join(root, "b.txt"), `${"b".repeat(40)}\n`);
+    const { client } = await connectedClient({
+      roots: [root],
+      config: { caps: { search_chars: 20 } },
+    });
+
+    const batch = await client.callTool({
+      name: "read_file",
+      arguments: { paths: ["a.txt", "b.txt"] },
+    });
+    const payload = JSON.parse(firstText(batch)) as {
+      files: Array<{ content: string; limit_hit?: boolean; omitted?: number }>;
+      limit_hit: boolean;
+      omitted_total: number;
+      suggestion: string;
+    };
+
+    expect(payload.limit_hit).toBe(true);
+    expect(payload.omitted_total).toBe(62);
+    expect(payload.suggestion).toContain("Use fewer paths");
+    expect(payload.files.map((file) => file.content)).toEqual(["aaaaaaaaaa", "bbbbbbbbbb"]);
+    expect(payload.files.every((file) => file.limit_hit)).toBe(true);
+  });
+
+  it("serves a root-targeted batched read_file over the linked transport", async () => {
+    const defaultRoot = await tempRoot();
+    const otherRoot = await tempRoot();
+    await write(join(defaultRoot, "default.txt"), "default\n");
+    await write(join(otherRoot, "other-a.txt"), "other a\n");
+    await write(join(otherRoot, "other-b.txt"), "other b\n");
+    const { client } = await connectedClient({ roots: [defaultRoot] });
+
+    const batch = await client.callTool({
+      name: "read_file",
+      arguments: { root: otherRoot, paths: ["other-b.txt", "other-a.txt"] },
+    });
+    const payload = JSON.parse(firstText(batch)) as {
+      files: Array<{ path: string; content: string }>;
+      invalid_paths: string[];
+    };
+
+    expect(payload.invalid_paths).toEqual([]);
+    expect(payload.files.map((file) => [file.path, file.content])).toEqual([
+      ["other-b.txt", "other b\n"],
+      ["other-a.txt", "other a\n"],
+    ]);
+  });
+
   it("accepts get_file_tree max_tokens and rejects invalid values through schema validation", async () => {
     const root = await tempRoot();
     for (let index = 0; index < 35; index += 1) {

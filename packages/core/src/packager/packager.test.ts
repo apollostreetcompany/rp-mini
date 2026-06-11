@@ -28,6 +28,7 @@ function withConfig(overrides: DeepPartial<Config> = {}): Config {
   const config = structuredClone(defaultConfig);
   if (overrides.budgets) Object.assign(config.budgets, overrides.budgets);
   if (overrides.caps) Object.assign(config.caps, overrides.caps);
+  if (overrides.concurrency) Object.assign(config.concurrency, overrides.concurrency);
   if (overrides.selection) Object.assign(config.selection, overrides.selection);
   if (overrides.presets) {
     config.presets = {
@@ -231,6 +232,145 @@ describe("assemblePayload", () => {
     expect(payload.text).toContain("noise");
     expect(payload.text).toMatch(/packages\/ \u2026 \(\d+ dirs/);
     expect(payload.tokenBreakdown.file_tree).toBeLessThanOrEqual(config.caps.tree_tokens + 5);
+  });
+
+  it("renders 10 selected files byte-identically to the pre-concurrency golden", async () => {
+    const root = await tempRoot("packager-determinism");
+    for (let index = 0; index < 10; index += 1) {
+      await write(
+        join(root, "src", `file-${index}.ts`),
+        `export const value${index} = ${index};\nexport const doubled${index} = ${index * 2};\n`,
+      );
+    }
+    const config = withConfig({
+      selection: { persist: false, auto_codemaps: false },
+      packager: { section_order: ["file_contents"] },
+      presets: { filesOnly: { include_files: true, include_tree: false, codemap_usage: "none" } },
+    });
+    const catalog = await buildCatalog([root], config);
+    const state = new SelectionState({ root, config, catalog, sessionId: "packager-determinism" });
+    await state.add(
+      Array.from({ length: 10 }, (_, index) => ({
+        path: `src/file-${index}.ts`,
+        mode: "full" as const,
+      })),
+    );
+
+    const payload = await assemblePayload(state.snapshot(), config, {
+      root,
+      catalog,
+      preset: "filesOnly",
+      now: () => new Date("2026-06-10T00:00:00.000Z"),
+    });
+
+    expect(payload.text).toMatchInlineSnapshot(`
+      "<file_contents>
+      File: src/file-0.ts
+      \`\`\`ts
+      export const value0 = 0;
+      export const doubled0 = 0;
+      \`\`\`
+
+      File: src/file-1.ts
+      \`\`\`ts
+      export const value1 = 1;
+      export const doubled1 = 2;
+      \`\`\`
+
+      File: src/file-2.ts
+      \`\`\`ts
+      export const value2 = 2;
+      export const doubled2 = 4;
+      \`\`\`
+
+      File: src/file-3.ts
+      \`\`\`ts
+      export const value3 = 3;
+      export const doubled3 = 6;
+      \`\`\`
+
+      File: src/file-4.ts
+      \`\`\`ts
+      export const value4 = 4;
+      export const doubled4 = 8;
+      \`\`\`
+
+      File: src/file-5.ts
+      \`\`\`ts
+      export const value5 = 5;
+      export const doubled5 = 10;
+      \`\`\`
+
+      File: src/file-6.ts
+      \`\`\`ts
+      export const value6 = 6;
+      export const doubled6 = 12;
+      \`\`\`
+
+      File: src/file-7.ts
+      \`\`\`ts
+      export const value7 = 7;
+      export const doubled7 = 14;
+      \`\`\`
+
+      File: src/file-8.ts
+      \`\`\`ts
+      export const value8 = 8;
+      export const doubled8 = 16;
+      \`\`\`
+
+      File: src/file-9.ts
+      \`\`\`ts
+      export const value9 = 9;
+      export const doubled9 = 18;
+      \`\`\`
+      </file_contents>"
+    `);
+  });
+
+  it("hydrates selected file contents concurrently while preserving output order", async () => {
+    const root = await tempRoot("packager-concurrency");
+    for (let index = 0; index < 10; index += 1) {
+      await write(
+        join(root, "src", `file-${index}.ts`),
+        `export const value${index} = ${index};\n`,
+      );
+    }
+    const config = withConfig({
+      concurrency: { hydrate: 4 },
+      selection: { persist: false, auto_codemaps: false },
+      packager: { section_order: ["file_contents"] },
+      presets: { filesOnly: { include_files: true, include_tree: false, codemap_usage: "none" } },
+    });
+    const catalog = await buildCatalog([root], config);
+    const state = new SelectionState({ root, config, catalog, sessionId: "packager-concurrency" });
+    await state.add(
+      Array.from({ length: 10 }, (_, index) => ({
+        path: `src/file-${index}.ts`,
+        mode: "full" as const,
+      })),
+    );
+    let inFlight = 0;
+    let maxInFlight = 0;
+
+    const payload = await assemblePayload(state.snapshot(), config, {
+      root,
+      catalog,
+      preset: "filesOnly",
+      readFile: async (path) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        inFlight -= 1;
+        return `// ${path}\n`;
+      },
+      now: () => new Date("2026-06-10T00:00:00.000Z"),
+    });
+
+    expect(maxInFlight).toBeGreaterThanOrEqual(2);
+    expect(payload.text.indexOf("File: src/file-0.ts")).toBeLessThan(
+      payload.text.indexOf("File: src/file-9.ts"),
+    );
   });
 });
 
