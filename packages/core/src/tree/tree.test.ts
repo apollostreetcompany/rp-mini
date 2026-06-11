@@ -29,6 +29,12 @@ function expectTree(result: ReturnType<typeof generateFileTree>): FileTreeResult
   return result;
 }
 
+function visibleNodeCount(tree: string): number {
+  return tree
+    .split("\n")
+    .filter((line) => line && !line.startsWith("(+ denotes codemap available)")).length;
+}
+
 describe("generateFileTree", () => {
   it("renders a deterministic full tree with dirs first, maxDepth, and asset catalog labels", async () => {
     const root = await tempRoot();
@@ -75,6 +81,109 @@ describe("generateFileTree", () => {
     expect(auto.wasTruncated).toBe(true);
     expect(auto.chosenDepth).toBeDefined();
     expect(estimateTokens(auto.tree)).toBeLessThanOrEqual(config.caps.tree_tokens);
+  });
+
+  it("fills at least half of a budget that has deeper same-stage detail available", async () => {
+    const root = await tempRoot("budget-fill");
+    for (let top = 0; top < 4; top += 1) {
+      for (let branch = 0; branch < 4; branch += 1) {
+        for (let leaf = 0; leaf < 20; leaf += 1) {
+          await write(
+            join(
+              root,
+              `top-${top}`,
+              `branch-${branch}`,
+              "level-3",
+              "level-4",
+              `leaf-${leaf}`,
+              `file-${leaf}.ts`,
+            ),
+          );
+        }
+      }
+    }
+    const budget = 5_000;
+    const config = withConfig({ caps: { tree_tokens: budget } });
+    const catalog = await buildCatalog([root], config);
+
+    const auto = expectTree(generateFileTree(catalog, config, { mode: "auto" }));
+    const tokens = estimateTokens(auto.tree);
+
+    expect(tokens).toBeLessThanOrEqual(budget);
+    expect(tokens).toBeGreaterThanOrEqual(budget * 0.5);
+    expect(auto.suggestion).toContain("full tree, distant subtrees summarized at depth 5");
+  });
+
+  it("chooses the deepest collapse-distance variant that still fits", async () => {
+    const root = await tempRoot("deepest-fit");
+    for (let top = 0; top < 2; top += 1) {
+      for (let branch = 0; branch < 2; branch += 1) {
+        for (let leaf = 0; leaf < 5; leaf += 1) {
+          await write(
+            join(
+              root,
+              `top-${top}`,
+              `branch-${branch}`,
+              "level-3",
+              "level-4",
+              `leaf-${leaf}`,
+              `file-${leaf}.ts`,
+            ),
+          );
+        }
+      }
+    }
+    const budget = 500;
+    const config = withConfig({ caps: { tree_tokens: budget } });
+    const catalog = await buildCatalog([root], config);
+
+    const auto = expectTree(generateFileTree(catalog, config, { mode: "auto" }));
+    const full = expectTree(generateFileTree(catalog, config, { mode: "full" }));
+
+    expect(estimateTokens(auto.tree)).toBeLessThanOrEqual(budget);
+    expect(estimateTokens(full.tree)).toBeGreaterThan(budget);
+    expect(auto.chosenDepth).toBe(5);
+    expect(auto.suggestion).toContain("full tree, distant subtrees summarized at depth 5");
+    expect(auto.tree.replace(/rp-mini-deepest-fit-[0-9a-f-]+/, "rp-mini-deepest-fit-<uuid>"))
+      .toMatchInlineSnapshot(`
+        "(+ denotes codemap available)
+        rp-mini-deepest-fit-<uuid>
+        ├── top-0/ … (10 files, 16 dirs)
+        │   ├── branch-0/ … (5 files, 7 dirs)
+        │   │   └── level-3/ … (5 files, 6 dirs)
+        │   │       └── level-4/ … (5 files, 5 dirs)
+        │   │           ├── leaf-0/ … (1 file)
+        │   │           ├── leaf-1/ … (1 file)
+        │   │           ├── leaf-2/ … (1 file)
+        │   │           ├── leaf-3/ … (1 file)
+        │   │           └── leaf-4/ … (1 file)
+        │   └── branch-1/ … (5 files, 7 dirs)
+        │       └── level-3/ … (5 files, 6 dirs)
+        │           └── level-4/ … (5 files, 5 dirs)
+        │               ├── leaf-0/ … (1 file)
+        │               ├── leaf-1/ … (1 file)
+        │               ├── leaf-2/ … (1 file)
+        │               ├── leaf-3/ … (1 file)
+        │               └── leaf-4/ … (1 file)
+        └── top-1/ … (10 files, 16 dirs)
+            ├── branch-0/ … (5 files, 7 dirs)
+            │   └── level-3/ … (5 files, 6 dirs)
+            │       └── level-4/ … (5 files, 5 dirs)
+            │           ├── leaf-0/ … (1 file)
+            │           ├── leaf-1/ … (1 file)
+            │           ├── leaf-2/ … (1 file)
+            │           ├── leaf-3/ … (1 file)
+            │           └── leaf-4/ … (1 file)
+            └── branch-1/ … (5 files, 7 dirs)
+                └── level-3/ … (5 files, 6 dirs)
+                    └── level-4/ … (5 files, 5 dirs)
+                        ├── leaf-0/ … (1 file)
+                        ├── leaf-1/ … (1 file)
+                        ├── leaf-2/ … (1 file)
+                        ├── leaf-3/ … (1 file)
+                        └── leaf-4/ … (1 file)
+        "
+      `);
   });
 
   it("keeps a generous-budget auto tree byte-identical to full mode", async () => {
@@ -159,6 +268,34 @@ describe("generateFileTree", () => {
     expect(estimateTokens(rendered[1]!.tree)).toBeGreaterThanOrEqual(
       estimateTokens(rendered[2]!.tree),
     );
+  });
+
+  it("never shows fewer visible nodes when auto tree budget increases", async () => {
+    const root = await tempRoot("monotonic");
+    for (const top of ["apps", "packages", "services"]) {
+      for (let area = 0; area < 10; area += 1) {
+        for (let file = 0; file < 4; file += 1) {
+          await write(join(root, top, `area-${area}`, "deep", "leaf", `file-${file}.ts`));
+        }
+      }
+    }
+    const catalog = await buildCatalog([root], withConfig());
+    const budgets = [400, 1_500, 4_500, 9_000];
+    const counts = budgets.map((budget) => {
+      const config = withConfig({ caps: { tree_tokens: budget } });
+      const tree = expectTree(
+        generateFileTree(catalog, config, {
+          mode: "auto",
+          selectedPaths: ["services/area-9/deep/leaf/file-3.ts"],
+        }),
+      );
+      expect(estimateTokens(tree.tree)).toBeLessThanOrEqual(budget);
+      return visibleNodeCount(tree.tree);
+    });
+
+    expect(counts[1]).toBeGreaterThanOrEqual(counts[0]!);
+    expect(counts[2]).toBeGreaterThanOrEqual(counts[1]!);
+    expect(counts[3]).toBeGreaterThanOrEqual(counts[2]!);
   });
 
   it("renders deterministic auto output for identical inputs", async () => {

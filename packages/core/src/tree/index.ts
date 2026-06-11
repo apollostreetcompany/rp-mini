@@ -51,6 +51,18 @@ interface RenderProfile {
   name: string;
 }
 
+interface BuiltRoot {
+  root: Node;
+  maxDepth: number;
+}
+
+type RefinableParameter = "depthLimit" | "collapseDistantAt";
+
+interface AutoStage {
+  profile: RenderProfile;
+  parameter?: RefinableParameter;
+}
+
 const SOURCE_DIR_NAMES = new Set([
   "app",
   "apps",
@@ -94,59 +106,78 @@ function renderAuto(
   options: FileTreeOptions,
 ): FileTreeResult {
   const budget = options.maxTokens ?? config.caps.tree_tokens;
-  const full = renderCatalog(catalog, config, { ...options, mode: "full" });
+  const builtRoots = buildRenderRoots(catalog, config, { ...options, mode: "full" }, true);
+  const selectedBuiltRoots = buildRenderRoots(
+    catalog,
+    config,
+    { ...options, mode: "selected" },
+    true,
+  );
+  const full = renderBuiltCatalog(builtRoots, options.maxDepth);
   if (estimateTokens(full.tree) <= budget) return full;
 
-  const maxDepth = maxCatalogDepth(catalog);
+  const maxDepth = Math.max(0, ...builtRoots.map((root) => root.maxDepth));
   const depth3 = options.maxDepth === undefined ? 3 : Math.min(3, options.maxDepth);
-  const profiles: RenderProfile[] = [
-    { mode: "full", collapseDistantAt: 4, name: "full summarized distant depth >= 4" },
-    { mode: "full", depthLimit: depth3, name: `full depth cap ${depth3}` },
+  const stages: AutoStage[] = [
     {
-      mode: "folders",
-      collapseDistantAt: 4,
-      name: "directory-only view; selected files shown",
+      profile: {
+        mode: "full",
+        collapseDistantAt: 4,
+        name: "full tree, distant subtrees summarized at depth 4",
+      },
+      parameter: "collapseDistantAt",
     },
     {
-      mode: "folders",
-      depthLimit: depth3,
-      name: `directory-only view; depth cap ${depth3}; selected files shown`,
+      profile: { mode: "full", depthLimit: depth3, name: `full tree, depth capped at ${depth3}` },
+      parameter: "depthLimit",
     },
     {
-      mode: "selected",
-      selectedOnly: true,
-      name: "selected-only view with summarized root coverage",
+      profile: {
+        mode: "folders",
+        collapseDistantAt: 4,
+        name: "directory-only tree, distant subtrees summarized at depth 4; selected files shown",
+      },
+      parameter: "collapseDistantAt",
+    },
+    {
+      profile: {
+        mode: "folders",
+        depthLimit: depth3,
+        name: `directory-only tree, depth capped at ${depth3}; selected files shown`,
+      },
+      parameter: "depthLimit",
+    },
+    {
+      profile: {
+        mode: "selected",
+        selectedOnly: true,
+        name: "selected-only view with summarized root coverage",
+      },
     },
   ];
 
-  for (const profile of profiles) {
-    const rendered = renderCatalog(
-      catalog,
-      config,
-      {
-        ...options,
-        mode: profile.mode,
-        maxDepth: profile.depthLimit,
-      },
-      profile,
-    );
+  for (const stage of stages) {
+    const stageRoots = stage.profile.selectedOnly ? selectedBuiltRoots : builtRoots;
+    const rendered = renderBuiltCatalog(stageRoots, stage.profile.depthLimit, stage.profile);
     if (estimateTokens(rendered.tree) <= budget) {
+      const refined = refineAutoStage(stageRoots, stage, budget, maxDepth, options.maxDepth);
+      const { profile, ...refinedResult } = refined;
       return {
-        ...rendered,
+        ...refinedResult,
         limit_hit: true,
         wasTruncated: true,
-        chosenDepth: profile.depthLimit ?? maxDepth,
+        chosenDepth: profile.depthLimit ?? profile.collapseDistantAt ?? maxDepth,
         suggestion: `Auto tree used ${profile.name}. Use max_tokens, max_depth, or path to reshape.`,
       };
     }
   }
 
-  const fallback = renderCatalog(
-    catalog,
-    config,
-    { ...options, mode: "selected" },
-    { mode: "selected", selectedOnly: true, collapseDistantAt: 1, name: "root summaries" },
-  );
+  const fallback = renderBuiltCatalog(selectedBuiltRoots, undefined, {
+    mode: "selected",
+    selectedOnly: true,
+    collapseDistantAt: 1,
+    name: "root summaries",
+  });
   return {
     ...fallback,
     limit_hit: true,
@@ -156,14 +187,97 @@ function renderAuto(
   };
 }
 
+function refineAutoStage(
+  builtRoots: BuiltRoot[],
+  stage: AutoStage,
+  budget: number,
+  maxDepth: number,
+  explicitMaxDepth: number | undefined,
+): FileTreeResult & { profile: RenderProfile } {
+  let bestProfile = stage.profile;
+  let best = renderBuiltCatalog(builtRoots, bestProfile.depthLimit, bestProfile);
+  if (!stage.parameter) return { ...best, profile: bestProfile };
+
+  const current = bestProfile[stage.parameter];
+  if (current === undefined) return { ...best, profile: bestProfile };
+
+  const upperBound =
+    stage.parameter === "depthLimit" && explicitMaxDepth !== undefined
+      ? Math.min(explicitMaxDepth, maxDepth)
+      : maxDepth;
+
+  for (let candidate = current + 1; candidate <= upperBound; candidate += 1) {
+    const profile = profileWithParameter(stage.profile, stage.parameter, candidate);
+    const rendered = renderBuiltCatalog(builtRoots, profile.depthLimit, profile);
+    if (estimateTokens(rendered.tree) > budget) break;
+    bestProfile = profile;
+    best = rendered;
+  }
+
+  return { ...best, profile: bestProfile };
+}
+
+function profileWithParameter(
+  profile: RenderProfile,
+  parameter: RefinableParameter,
+  value: number,
+): RenderProfile {
+  if (parameter === "depthLimit") {
+    return {
+      ...profile,
+      depthLimit: value,
+      name:
+        profile.mode === "folders"
+          ? `directory-only tree, depth capped at ${value}; selected files shown`
+          : `full tree, depth capped at ${value}`,
+    };
+  }
+
+  return {
+    ...profile,
+    collapseDistantAt: value,
+    name:
+      profile.mode === "folders"
+        ? `directory-only tree, distant subtrees summarized at depth ${value}; selected files shown`
+        : `full tree, distant subtrees summarized at depth ${value}`,
+  };
+}
+
 function renderCatalog(
   catalog: FileCatalog,
   config: Config,
   options: FileTreeOptions,
   profile?: RenderProfile,
 ): FileTreeResult {
-  const maxDepth = options.maxDepth;
-  const rootLines = catalog.roots.flatMap((root) => {
+  const includeFiles = options.mode !== "folders" || profile !== undefined;
+  return renderBuiltCatalog(
+    buildRenderRoots(catalog, config, options, includeFiles),
+    options.maxDepth,
+    profile,
+  );
+}
+
+function renderBuiltCatalog(
+  roots: BuiltRoot[],
+  maxDepth?: number,
+  profile?: RenderProfile,
+): FileTreeResult {
+  const rootLines = roots.flatMap(({ root }) => renderNode(root, "", true, 0, maxDepth, profile));
+  return {
+    tree: `(+ denotes codemap available)\n${rootLines.join("\n")}\n`,
+    limit_hit: false,
+    omitted_total: 0,
+    wasTruncated: false,
+  };
+}
+
+function buildRenderRoots(
+  catalog: FileCatalog,
+  config: Config,
+  options: FileTreeOptions,
+  includeFiles: boolean,
+): BuiltRoot[] {
+  return catalog.roots.map((root) => {
     const basePath = normalize(options.path ?? "");
     const tree = buildRoot(root.root, basename(root.root) || root.root);
     const selectedPaths = new Set((options.selectedPaths ?? []).map(normalize));
@@ -177,7 +291,7 @@ function renderCatalog(
         dir.relativePath.endsWith(".xcassets"),
       );
     }
-    if (options.mode !== "folders" || profile !== undefined) {
+    if (includeFiles) {
       for (const file of root.files) {
         if (!insideBase(file.relativePath, basePath)) continue;
         if (
@@ -200,14 +314,8 @@ function renderCatalog(
     if (basePath) tree.name = basePath.split("/").at(-1) ?? tree.name;
     finalizeCounts(tree);
     markAnchors(tree, selectedPaths, codemapPaths, Boolean(basePath));
-    return renderNode(tree, "", true, 0, maxDepth, profile);
+    return { root: tree, maxDepth: maxTreeDepth(tree) };
   });
-  return {
-    tree: `(+ denotes codemap available)\n${rootLines.join("\n")}\n`,
-    limit_hit: false,
-    omitted_total: 0,
-    wasTruncated: false,
-  };
 }
 
 function buildRoot(path: string, name: string): Node {
@@ -391,12 +499,9 @@ function markAnchors(
   return visit(root, 0);
 }
 
-function maxCatalogDepth(catalog: FileCatalog): number {
-  const paths = catalog.roots.flatMap((root) => [
-    ...root.dirs.map((entry) => entry.relativePath),
-    ...root.files.map((entry) => entry.relativePath),
-  ]);
-  return Math.max(0, ...paths.map((path) => normalize(path).split("/").filter(Boolean).length));
+function maxTreeDepth(node: Node): number {
+  if (node.children.size === 0) return 0;
+  return Math.max(0, ...[...node.children.values()].map((child) => 1 + maxTreeDepth(child)));
 }
 
 function insideBase(path: string, base: string): boolean {

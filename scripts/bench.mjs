@@ -106,6 +106,7 @@ async function main() {
       `${budget}`,
       formatMs(measurement.ms),
       `${tokens}/${budget}`,
+      formatPercent(tokens / budget),
       `${anchorRetention.visible}/${anchorRetention.total} (${formatPercent(anchorRetention.visible / anchorRetention.total)})`,
       `${topCoverage.visible}/${topCoverage.total} (${formatPercent(topCoverage.visible / topCoverage.total)})`,
     ]);
@@ -411,9 +412,11 @@ function markdownTable(rows) {
 
 function treeMarkdownTable(rows) {
   return [
-    "| Budget | Median render | Tokens used | Anchor retention | Top-level coverage |",
-    "| ---: | ---: | ---: | ---: | ---: |",
-    ...rows.map((row) => `| ${row[0]} | ${row[1]} | ${row[2]} | ${row[3]} | ${row[4]} |`),
+    "| Budget | Median render | Tokens used | Utilization | Anchor retention | Top-level coverage |",
+    "| ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...rows.map(
+      (row) => `| ${row[0]} | ${row[1]} | ${row[2]} | ${row[3]} | ${row[4]} | ${row[5]} |`,
+    ),
   ].join("\n");
 }
 
