@@ -114,9 +114,43 @@ path/to/other.ts: Relationship to the task and selected files.
 <ambiguities>
 Factual ambiguity that remains, or None.
 </ambiguities>
+
+<questions>
+<question key="migration-backfill" severity="blocking" default="separate-job">
+Should the user-table migration backfill existing rows inline?
+<option value="inline">Backfill in the same migration</option>
+<option value="separate-job">Separate backfill job</option>
+<evidence>db/migrate/20260601_users.rb; docs/runbooks/migrations.md</evidence>
+</question>
+</questions>
 ```
 
 Emphasize symbols, architecture, and relationships. Be specific and concise. Do not propose implementation unless the response type asks for a plan after context is built.
+
+## Question Loop
+
+Use `<questions>` only when ambiguity remains after evidence gathering. Place it after `<ambiguities>`.
+
+Rules:
+
+- Question keys are stable kebab-case.
+- Use `severity="blocking"` when work cannot proceed safely without an answer, or `severity="advisory"` when the host may proceed with the `default` while flagging it.
+- Every question carries a `default` and evidence pointers in `<evidence>`.
+- Options use stable `value` attributes; labels explain the choice.
+- You must complete the best selection you can and save the handoff profile before halting; questions never excuse an empty selection.
+- Advisory questions never block.
+
+On start, read the existing prompt. If `<answers>` are present, treat them as binding decisions, refine the loaded selection accordingly, and do not re-ask answered keys.
+
+The host appends answers with `prompt op=append`:
+
+```xml
+<answers>
+<answer key="migration-backfill" source="orchestrator|user">separate-job</answer>
+</answers>
+```
+
+`source="orchestrator"` means the caller answered from conclusive repo evidence. `source="user"` means the caller interrupted the human for a blocking, high-stakes decision. Unanswered advisory keys remain listed, but proceed with defaults.
 
 ## Prompt Enhancement Modes
 
