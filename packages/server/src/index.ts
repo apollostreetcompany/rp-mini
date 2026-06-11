@@ -14,6 +14,7 @@ import {
   getCodeStructures,
   getCatalog,
   loadConfig,
+  readFileBatch,
   readFileSlice,
   relativeToRoot,
   resolveRootPath,
@@ -90,15 +91,19 @@ export const toolDefinitions: ToolDefinition[] = [
     name: "read_file",
     family: "discovery",
     description:
-      "Read one file by path with optional start_line, negative tail offsets, and line limit; returns range metadata. Optional root targets another workspace root.",
+      "Read one file by path or 1-32 files via paths with optional start_line, negative tail offsets, and line limit applied to every file. Optional root targets another workspace root.",
     inputSchema: z
       .object({
         root: rootArg,
-        path: z.string().min(1),
+        path: z.string().min(1).optional(),
+        paths: z.array(z.string().min(1)).min(1).max(32).optional(),
         start_line: z.number().int().optional(),
         limit: positiveInt.optional(),
       })
-      .strict(),
+      .strict()
+      .refine((args) => (args.path === undefined) !== (args.paths === undefined), {
+        message: "Provide exactly one of path or paths.",
+      }),
   },
   {
     name: "get_file_tree",
@@ -616,12 +621,30 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
     }
     case "read_file": {
       const catalog = await getCatalog(config.roots, config);
-      const readArgs = args as { path: string; start_line?: number; limit?: number };
-      const file = findCatalogFile(catalog, readArgs.path);
-      if (!file) {
-        return { error: { code: "not_found", message: `${readArgs.path} is not in the catalog.` } };
+      const readArgs = args as {
+        path?: string;
+        paths?: string[];
+        start_line?: number;
+        limit?: number;
+      };
+      if (readArgs.path !== undefined) {
+        const file = findCatalogFile(catalog, readArgs.path);
+        if (!file) {
+          return {
+            error: { code: "not_found", message: `${readArgs.path} is not in the catalog.` },
+          };
+        }
+        return readFileSlice(file, { startLine: readArgs.start_line, limit: readArgs.limit });
       }
-      return readFileSlice(file, { startLine: readArgs.start_line, limit: readArgs.limit });
+      return readFileBatch(
+        (readArgs.paths ?? []).map((path) => ({ path, entry: findCatalogFile(catalog, path) })),
+        {
+          startLine: readArgs.start_line,
+          limit: readArgs.limit,
+          totalCharBudget: config.caps.search_chars,
+          concurrency: config.concurrency.hydrate,
+        },
+      );
     }
     case "get_file_tree": {
       const catalog = await getCatalog(config.roots, config);

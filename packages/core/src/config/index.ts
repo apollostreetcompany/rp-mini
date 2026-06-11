@@ -70,6 +70,7 @@ export interface Config {
   concurrency: {
     parse_workers: number;
     search_max: number;
+    hydrate: number;
   };
   daemon: {
     keep_alive: boolean;
@@ -173,7 +174,7 @@ export const defaultConfig: Config = {
     section_order: ["file_map", "file_contents", "git_diff", "meta_prompts", "user_instructions"],
     duplicate_instructions_at_top: false,
   },
-  concurrency: { parse_workers: 4, search_max: 4 },
+  concurrency: { parse_workers: 4, search_max: 4, hydrate: 8 },
   daemon: { keep_alive: false, idle_timeout_s: 300, max_rss_mb: 1500 },
   paths: "relative",
 };
@@ -221,6 +222,7 @@ function envToConfig(env: Record<string, string | undefined>): DeepPartial<Confi
   setNumber(result, ["caps", "file_size_bytes"], env.RP_MINI_CAPS_FILE_SIZE_BYTES);
   setNumber(result, ["concurrency", "parse_workers"], env.RP_MINI_CONCURRENCY_PARSE_WORKERS);
   setNumber(result, ["concurrency", "search_max"], env.RP_MINI_CONCURRENCY_SEARCH_MAX);
+  setNumber(result, ["concurrency", "hydrate"], env.RP_MINI_CONCURRENCY_HYDRATE);
   setNumber(result, ["daemon", "idle_timeout_s"], env.RP_MINI_DAEMON_IDLE_TIMEOUT_S);
   setNumber(result, ["daemon", "max_rss_mb"], env.RP_MINI_DAEMON_MAX_RSS_MB);
   setNumber(result, ["dynamic_roots", "max"], env.RP_MINI_DYNAMIC_ROOTS_MAX);

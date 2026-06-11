@@ -77,6 +77,7 @@ Config layers are defaults, `~/.config/rp-mini/config.json`, workspace `rp-mini.
 | `packager.duplicate_instructions_at_top` | `false` | Optionally repeats user instructions before the payload. |
 | `concurrency.parse_workers` | `4` | Per-process codemap parse worker count. |
 | `concurrency.search_max` | `4` | Intended per-process search concurrency bound. |
+| `concurrency.hydrate` | `8` | Bounded concurrent file-content hydration for batched reads and packaged exports. |
 | `daemon.keep_alive` | `false` | Placeholder for post-MVP daemon mode. |
 | `daemon.idle_timeout_s` | `300` | Post-MVP daemon idle timeout. |
 | `daemon.max_rss_mb` | `1500` | Post-MVP daemon memory ceiling. |
@@ -103,7 +104,7 @@ Every MCP tool accepts optional `root`, an absolute workspace path that targets 
 | Tool | Purpose |
 | --- | --- |
 | `file_search` | Search by path, content, or both through catalog-approved files. |
-| `read_file` | Read full files, line ranges, or negative tail ranges. |
+| `read_file` | Read one `path` or 1-32 `paths`; `start_line`/`limit` apply to every file in a batch, invalid batch paths are collected, and batch contents are fair-share capped. |
 | `get_file_tree` | Render capped trees in auto, full, folders, or selected mode; accepts optional `max_tokens` up to 50000 for per-call tree budgets. |
 | `get_code_structure` | Return codemap signatures for files, directories, or selected scope. |
 | `manage_selection` | Add, set, remove, promote, demote, save, or load context selections. |
