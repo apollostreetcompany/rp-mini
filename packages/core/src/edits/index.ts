@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { Config } from "../config/index.js";
@@ -23,6 +24,8 @@ export interface ApplyFileEditsOptions {
   rewrite?: string;
   on_missing?: "error" | "create";
   verbose?: boolean;
+  dry_run?: boolean;
+  expected_sha256?: string;
   config?: Config;
 }
 
@@ -33,11 +36,19 @@ export interface FileActionOptions {
   content?: string;
   new_path?: string;
   if_exists?: "error" | "overwrite";
+  expected_sha256?: string;
   config?: Config;
 }
 
+export interface EditPostContext {
+  edit_index: number;
+  start_line: number;
+  end_line: number;
+  text: string;
+}
+
 export interface EditSummary {
-  status: "ok" | "error";
+  status: "previewed" | "applied" | "error";
   path: string;
   edits_applied: number;
   matched_by: MatchedBy[];
@@ -46,6 +57,10 @@ export interface EditSummary {
   note?: string;
   unified_diff?: string;
   dice_scores: number[];
+  pre_sha256?: string;
+  post_sha256?: string;
+  verified?: boolean;
+  post_context?: EditPostContext[];
 }
 
 export type EditError =
@@ -57,7 +72,9 @@ export type EditError =
   | { code: "ambiguous_match"; candidates: number[]; edit_index?: number }
   | { code: "overlapping_edits"; edit_indices: number[] }
   | { code: "already_exists"; path: string }
-  | { code: "destination_exists"; path: string };
+  | { code: "destination_exists"; path: string }
+  | { code: "stale_file"; expected_sha256: string; actual_sha256: string }
+  | { code: "post_write_mismatch"; expected_sha256: string; actual_sha256: string };
 
 interface ResolvedPath {
   root: string;
@@ -137,6 +154,14 @@ export async function applyFileEdits(options: ApplyFileEditsOptions): Promise<Ed
   if (originalRaw === null) {
     return errorSummary(summaryPath, { code: "not_found", path: summaryPath });
   }
+  const pre_sha256 = sha256(originalRaw);
+  if (options.expected_sha256 !== undefined && options.expected_sha256 !== pre_sha256) {
+    return errorSummary(summaryPath, {
+      code: "stale_file",
+      expected_sha256: options.expected_sha256,
+      actual_sha256: pre_sha256,
+    });
+  }
   const shape = textShape(originalRaw);
   const operations = options.edits ?? [
     { search: options.search ?? "", replace: options.replace ?? "", all: options.all },
@@ -167,23 +192,53 @@ export async function applyFileEdits(options: ApplyFileEditsOptions): Promise<Ed
   const updatedNormalized = applyResolvedEdits(shape.normalized, resolved);
   const finalNormalized = preserveTrailingNewline(updatedNormalized, shape.hadTrailingNewline);
   const finalRaw = restoreLineEndings(finalNormalized, shape.lineEnding);
-  await writeFile(pathResult.absolutePath, finalRaw, "utf8");
-  await postMutation(pathResult, config);
-
   const matched_by = operations.map((_, index) => matchedByByEdit.get(index) ?? "literal");
   const dice_scores = operations
     .map((_, index) => diceScoresByEdit.get(index))
     .filter((score): score is number => score !== undefined);
-  return {
-    status: "ok",
+  const post_context = postContexts(finalNormalized, resolved);
+  const base = {
     path: pathResult.relativePath,
     edits_applied: resolved.length,
     matched_by,
     file_created: false,
     dice_scores,
-    ...(options.verbose
-      ? { unified_diff: unifiedDiff(pathResult.relativePath, shape.normalized, finalNormalized) }
-      : {}),
+    pre_sha256,
+    unified_diff: unifiedDiff(pathResult.relativePath, shape.normalized, finalNormalized),
+  };
+  if (options.dry_run) {
+    return {
+      status: "previewed",
+      ...base,
+      post_context,
+    };
+  }
+
+  await writeFile(pathResult.absolutePath, finalRaw, "utf8");
+  const postRaw = await readFile(pathResult.absolutePath, "utf8");
+  const post_sha256 = sha256(postRaw);
+  const verified = postRaw === finalRaw;
+  if (!verified) {
+    return {
+      status: "error",
+      ...base,
+      post_sha256,
+      verified: false,
+      error: {
+        code: "post_write_mismatch",
+        expected_sha256: sha256(finalRaw),
+        actual_sha256: post_sha256,
+      },
+    };
+  }
+  await postMutation(pathResult, config);
+
+  return {
+    status: "applied",
+    ...base,
+    post_sha256,
+    verified: true,
+    post_context,
   };
 }
 
@@ -204,7 +259,7 @@ export async function fileAction(options: FileActionOptions): Promise<EditSummar
     await writeFile(pathResult.absolutePath, options.content ?? "", "utf8");
     await postMutation(pathResult, config);
     return {
-      status: "ok",
+      status: "applied",
       path: pathResult.relativePath,
       edits_applied: 1,
       matched_by: ["rewrite"],
@@ -214,21 +269,31 @@ export async function fileAction(options: FileActionOptions): Promise<EditSummar
   }
 
   if (options.action === "delete") {
-    if (!(await existsPath(pathResult.absolutePath))) {
+    const originalRaw = await readExisting(pathResult);
+    if (originalRaw === null) {
       return errorSummary(pathResult.relativePath, {
         code: "not_found",
         path: pathResult.relativePath,
       });
     }
+    const pre_sha256 = sha256(originalRaw);
+    if (options.expected_sha256 !== undefined && options.expected_sha256 !== pre_sha256) {
+      return errorSummary(pathResult.relativePath, {
+        code: "stale_file",
+        expected_sha256: options.expected_sha256,
+        actual_sha256: pre_sha256,
+      });
+    }
     await rm(pathResult.absolutePath, { force: true, recursive: false });
     await postMutation(pathResult, config);
     return {
-      status: "ok",
+      status: "applied",
       path: pathResult.relativePath,
       edits_applied: 1,
       matched_by: [],
       file_created: false,
       dice_scores: [],
+      pre_sha256,
     };
   }
 
@@ -240,6 +305,21 @@ export async function fileAction(options: FileActionOptions): Promise<EditSummar
   }
   const newPath = resolveWorkspacePath(options.roots, options.new_path);
   if ("error" in newPath) return errorSummary(options.new_path, newPath.error);
+  const originalRaw = await readExisting(pathResult);
+  if (originalRaw === null) {
+    return errorSummary(pathResult.relativePath, {
+      code: "not_found",
+      path: pathResult.relativePath,
+    });
+  }
+  const pre_sha256 = sha256(originalRaw);
+  if (options.expected_sha256 !== undefined && options.expected_sha256 !== pre_sha256) {
+    return errorSummary(pathResult.relativePath, {
+      code: "stale_file",
+      expected_sha256: options.expected_sha256,
+      actual_sha256: pre_sha256,
+    });
+  }
   if ((await existsPath(newPath.absolutePath)) && (options.if_exists ?? "error") !== "overwrite") {
     return errorSummary(newPath.relativePath, {
       code: "destination_exists",
@@ -254,12 +334,13 @@ export async function fileAction(options: FileActionOptions): Promise<EditSummar
   await postMutation(pathResult, config);
   await postMutation(newPath, config);
   return {
-    status: "ok",
+    status: "applied",
     path: newPath.relativePath,
     edits_applied: 1,
     matched_by: [],
     file_created: false,
     dice_scores: [],
+    pre_sha256,
     note: `moved from ${pathResult.relativePath}`,
   };
 }
@@ -552,6 +633,41 @@ function applyResolvedEdits(content: string, edits: ResolvedEdit[]): string {
   return updated;
 }
 
+function postContexts(content: string, edits: ResolvedEdit[]): EditPostContext[] {
+  const contexts: EditPostContext[] = [];
+  let delta = 0;
+  for (const edit of [...edits].sort((a, b) => a.startOffset - b.startOffset)) {
+    const finalStart = edit.startOffset + delta;
+    const finalEnd = finalStart + edit.replacement.length;
+    const startLine = lineNumber(content, finalStart);
+    const endLine = lineNumber(content, Math.max(finalStart, finalEnd - 1));
+    contexts.push(contextForLineRange(content, edit.editIndex, startLine, endLine));
+    delta += edit.replacement.length - (edit.endOffset - edit.startOffset);
+  }
+  return contexts.sort((a, b) => a.edit_index - b.edit_index || a.start_line - b.start_line);
+}
+
+function rewritePostContext(content: string): EditPostContext[] {
+  const total = Math.max(1, lineRecords(content).length);
+  return [contextForLineRange(content, 0, 1, total)];
+}
+
+function contextForLineRange(
+  content: string,
+  editIndex: number,
+  startLine: number,
+  endLine: number,
+): EditPostContext {
+  const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
+  const safeStart = Math.max(1, startLine - 3);
+  const safeEnd = Math.min(lines.length, endLine + 3);
+  const text = lines
+    .slice(safeStart - 1, safeEnd)
+    .map((line, index) => `${safeStart + index}: ${line}`)
+    .join("\n");
+  return { edit_index: editIndex, start_line: startLine, end_line: endLine, text };
+}
+
 function textShape(raw: string): TextShape {
   const crlf = raw.match(/\r\n/g)?.length ?? 0;
   const lf = (raw.match(/(?<!\r)\n/g)?.length ?? 0) + (raw.match(/\r(?!\n)/g)?.length ?? 0);
@@ -679,6 +795,10 @@ function leadingWhitespace(line: string): string {
   return line.match(/^\s*/)?.[0] ?? "";
 }
 
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
+
 async function applyRewrite(
   path: ResolvedPath,
   rewrite: string,
@@ -690,6 +810,14 @@ async function applyRewrite(
   if (missing && (options.on_missing ?? "error") !== "create") {
     return errorSummary(path.relativePath, { code: "not_found", path: path.relativePath });
   }
+  const pre_sha256 = existingRaw === null ? sha256("") : sha256(existingRaw);
+  if (!missing && options.expected_sha256 !== undefined && options.expected_sha256 !== pre_sha256) {
+    return errorSummary(path.relativePath, {
+      code: "stale_file",
+      expected_sha256: options.expected_sha256,
+      actual_sha256: pre_sha256,
+    });
+  }
   const finalText = missing
     ? rewrite
     : restoreLineEndings(
@@ -699,25 +827,49 @@ async function applyRewrite(
         ),
         textShape(existingRaw).lineEnding,
       );
-  await mkdir(dirname(path.absolutePath), { recursive: true });
-  await writeFile(path.absolutePath, finalText, "utf8");
-  await postMutation(path, config);
-  return {
-    status: "ok",
+  const finalNormalized = finalText.replace(/\r\n/g, "\n");
+  const base = {
     path: path.relativePath,
     edits_applied: 1,
-    matched_by: ["rewrite"],
+    matched_by: ["rewrite" as const],
     file_created: missing,
     dice_scores: [],
-    ...(options.verbose
-      ? {
-          unified_diff: unifiedDiff(
-            path.relativePath,
-            existingRaw ?? "",
-            finalText.replace(/\r\n/g, "\n"),
-          ),
-        }
-      : {}),
+    pre_sha256,
+    unified_diff: unifiedDiff(path.relativePath, existingRaw ?? "", finalNormalized),
+  };
+  if (options.dry_run) {
+    return {
+      status: "previewed",
+      ...base,
+      post_context: rewritePostContext(finalNormalized),
+    };
+  }
+
+  await mkdir(dirname(path.absolutePath), { recursive: true });
+  await writeFile(path.absolutePath, finalText, "utf8");
+  const postRaw = await readFile(path.absolutePath, "utf8");
+  const post_sha256 = sha256(postRaw);
+  const verified = postRaw === finalText;
+  if (!verified) {
+    return {
+      status: "error",
+      ...base,
+      post_sha256,
+      verified: false,
+      error: {
+        code: "post_write_mismatch",
+        expected_sha256: sha256(finalText),
+        actual_sha256: post_sha256,
+      },
+    };
+  }
+  await postMutation(path, config);
+  return {
+    status: "applied",
+    ...base,
+    post_sha256,
+    verified: true,
+    post_context: rewritePostContext(finalNormalized),
   };
 }
 

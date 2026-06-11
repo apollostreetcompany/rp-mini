@@ -55,12 +55,101 @@ describe("applyFileEdits literal and escape tiers", () => {
     });
 
     expect(result).toMatchObject({
-      status: "ok",
+      status: "applied",
       edits_applied: 1,
       matched_by: ["literal"],
       file_created: false,
     });
     expect(await read(root, "src/a.ts")).toBe("one\nTWO\nthree\n");
+  });
+
+  it("previews dry_run edits with diff and pre_sha256 without touching disk", async () => {
+    const root = await tempRoot("dry-run");
+    const original = "one\ntwo\nthree\n";
+    await write(root, "src/a.ts", original);
+
+    const result = await applyFileEdits({
+      roots: [root],
+      path: "src/a.ts",
+      search: "two",
+      replace: "TWO",
+      dry_run: true,
+    });
+
+    expect(result).toMatchObject({
+      status: "previewed",
+      edits_applied: 1,
+      matched_by: ["literal"],
+      file_created: false,
+    });
+    expect(result.unified_diff).toContain("+TWO");
+    expect(result.pre_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.post_context?.[0]?.text).toContain("TWO");
+    expect(await read(root, "src/a.ts")).toBe(original);
+  });
+
+  it("applies preview handshakes with expected_sha256 and returns post-write proof", async () => {
+    const root = await tempRoot("hash-handshake");
+    await write(root, "src/a.ts", "one\ntwo\nthree\n");
+
+    const preview = await applyFileEdits({
+      roots: [root],
+      path: "src/a.ts",
+      search: "two",
+      replace: "TWO",
+      dry_run: true,
+    });
+    const applied = await applyFileEdits({
+      roots: [root],
+      path: "src/a.ts",
+      search: "two",
+      replace: "TWO",
+      expected_sha256: preview.pre_sha256,
+    });
+
+    expect(applied).toMatchObject({
+      status: "applied",
+      verified: true,
+      pre_sha256: preview.pre_sha256,
+      edits_applied: 1,
+    });
+    expect(applied.post_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(applied.post_sha256).not.toBe(preview.pre_sha256);
+    expect(applied.post_context?.[0]?.text).toContain("2: TWO");
+    expect(await read(root, "src/a.ts")).toBe("one\nTWO\nthree\n");
+  });
+
+  it("rejects stale expected_sha256 before matching and leaves the file untouched", async () => {
+    const root = await tempRoot("stale");
+    await write(root, "src/a.ts", "one\ntwo\nthree\n");
+
+    const preview = await applyFileEdits({
+      roots: [root],
+      path: "src/a.ts",
+      search: "two",
+      replace: "TWO",
+      dry_run: true,
+    });
+    await write(root, "src/a.ts", "one\nchanged\nthree\n");
+    const stale = await applyFileEdits({
+      roots: [root],
+      path: "src/a.ts",
+      search: "changed",
+      replace: "CHANGED",
+      expected_sha256: preview.pre_sha256,
+    });
+
+    expect(stale).toMatchObject({
+      status: "error",
+      error: {
+        code: "stale_file",
+        expected_sha256: preview.pre_sha256,
+      },
+    });
+    expect(stale.error && "actual_sha256" in stale.error ? stale.error.actual_sha256 : "").toMatch(
+      /^[a-f0-9]{64}$/,
+    );
+    expect(await read(root, "src/a.ts")).toBe("one\nchanged\nthree\n");
   });
 
   it("fails closed on multiple literal matches unless all is true", async () => {
@@ -87,7 +176,7 @@ describe("applyFileEdits literal and escape tiers", () => {
       replace: "done",
       all: true,
     });
-    expect(all).toMatchObject({ status: "ok", edits_applied: 2, matched_by: ["literal"] });
+    expect(all).toMatchObject({ status: "applied", edits_applied: 2, matched_by: ["literal"] });
     expect(await read(root, "src/a.ts")).toBe("done\nx\ndone\n");
   });
 
@@ -102,7 +191,7 @@ describe("applyFileEdits literal and escape tiers", () => {
       replace: String.raw`ALPHA\nBETA`,
     });
 
-    expect(result).toMatchObject({ status: "ok", matched_by: ["escape"] });
+    expect(result).toMatchObject({ status: "applied", matched_by: ["escape"] });
     expect(await read(root, "src/a.ts")).toBe("before\nALPHA\nBETA\nafter\n");
   });
 });
@@ -127,7 +216,7 @@ describe("applyFileEdits fuzzy tier", () => {
       replace: ["function calculateTotal(value: number) {", "  return value + 2;", "}"].join("\n"),
     });
 
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("applied");
     expect(result.matched_by).toEqual(["fuzzy"]);
     expect(result.dice_scores[0]).toBeGreaterThanOrEqual(0.7);
     expect(await read(root, "src/a.ts")).toContain("return value + 2;");
@@ -187,7 +276,7 @@ describe("applyFileEdits fuzzy tier", () => {
       search: "private callThing();",
       replace: "callThing();\nlogThing();",
     });
-    expect(spaceResult.status).toBe("ok");
+    expect(spaceResult.status).toBe("applied");
     expect(await read(spaces, "src/a.ts")).toBe(
       "if (ok) {\n    callThing();\n    logThing();\n}\n",
     );
@@ -200,7 +289,7 @@ describe("applyFileEdits fuzzy tier", () => {
       search: "private callThing();",
       replace: "callThing();\nlogThing();",
     });
-    expect(tabResult.status).toBe("ok");
+    expect(tabResult.status).toBe("applied");
     expect(await read(tabs, "src/a.ts")).toBe("if (ok) {\n\tcallThing();\n\tlogThing();\n}\n");
   });
 
@@ -213,7 +302,7 @@ describe("applyFileEdits fuzzy tier", () => {
       search: "a\nb\nc\nd",
       replace: "m1\nm2",
     });
-    expect(mediumResult.status).toBe("ok");
+    expect(mediumResult.status).toBe("applied");
     expect(await read(medium, "src/a.txt")).toBe("m1\nm2\nz\n");
 
     const long = await tempRoot("long");
@@ -224,7 +313,7 @@ describe("applyFileEdits fuzzy tier", () => {
       search: "h1\nh2\nh3\nsearch middle one\nsearch middle two\ntail1\ntail2",
       replace: "long done",
     });
-    expect(longResult.status).toBe("ok");
+    expect(longResult.status).toBe("applied");
     expect(await read(long, "src/a.txt")).toBe("long done\n");
   });
 });
@@ -245,7 +334,7 @@ describe("applyFileEdits batch, rewrite, endings, and unicode", () => {
     });
 
     expect(result).toMatchObject({
-      status: "ok",
+      status: "applied",
       edits_applied: 3,
       matched_by: ["literal", "literal", "literal"],
     });
@@ -280,6 +369,44 @@ describe("applyFileEdits batch, rewrite, endings, and unicode", () => {
     expect(await read(root, "src/a.txt")).toBe(original);
   });
 
+  it("previews transactional batches without writing and hash-gates batch applies", async () => {
+    const root = await tempRoot("batch-preview");
+    const original = "one\ntwo\nthree\nfour\nfive\n";
+    await write(root, "src/a.txt", original);
+
+    const preview = await applyFileEdits({
+      roots: [root],
+      path: "src/a.txt",
+      edits: [
+        { search: "one", replace: "zero\none" },
+        { search: "three\nfour", replace: "THREE" },
+        { search: "five", replace: "FIVE" },
+      ],
+      dry_run: true,
+    });
+
+    expect(preview).toMatchObject({
+      status: "previewed",
+      edits_applied: 3,
+      matched_by: ["literal", "literal", "literal"],
+    });
+    expect(preview.unified_diff).toContain("+THREE");
+    expect(await read(root, "src/a.txt")).toBe(original);
+
+    await write(root, "src/a.txt", "one\ntwo\nchanged\nfour\nfive\n");
+    const stale = await applyFileEdits({
+      roots: [root],
+      path: "src/a.txt",
+      edits: [
+        { search: "one", replace: "zero\none" },
+        { search: "changed\nfour", replace: "CHANGED" },
+      ],
+      expected_sha256: preview.pre_sha256,
+    });
+    expect(stale).toMatchObject({ status: "error", error: { code: "stale_file" } });
+    expect(await read(root, "src/a.txt")).toBe("one\ntwo\nchanged\nfour\nfive\n");
+  });
+
   it("supports rewrite create/error modes, CRLF preservation, trailing newline, unicode, and idempotence", async () => {
     const root = await tempRoot("rewrite");
     const missing = await applyFileEdits({
@@ -296,7 +423,7 @@ describe("applyFileEdits batch, rewrite, endings, and unicode", () => {
       rewrite: "created\n",
       on_missing: "create",
     });
-    expect(created).toMatchObject({ status: "ok", file_created: true });
+    expect(created).toMatchObject({ status: "applied", file_created: true });
     expect(await read(root, "src/new.txt")).toBe("created\n");
 
     await write(root, "src/crlf.txt", "one\r\ntwo\r\n");
@@ -306,7 +433,7 @@ describe("applyFileEdits batch, rewrite, endings, and unicode", () => {
       search: "two",
       replace: "emoji 😀",
     });
-    expect(crlf.status).toBe("ok");
+    expect(crlf.status).toBe("applied");
     expect(await read(root, "src/crlf.txt")).toBe("one\r\nemoji 😀\r\n");
 
     const again = await applyFileEdits({
@@ -316,6 +443,15 @@ describe("applyFileEdits batch, rewrite, endings, and unicode", () => {
       replace: "emoji 😀",
     });
     expect(again).toMatchObject({ status: "error", error: { code: "no_match" } });
+
+    const rewritePreview = await applyFileEdits({
+      roots: [root],
+      path: "src/crlf.txt",
+      rewrite: "whole\nfile\n",
+      dry_run: true,
+    });
+    expect(rewritePreview).toMatchObject({ status: "previewed", matched_by: ["rewrite"] });
+    expect(await read(root, "src/crlf.txt")).toBe("one\r\nemoji 😀\r\n");
   });
 
   it("returns a unified diff when verbose is true", async () => {
@@ -344,7 +480,7 @@ describe("fileAction", () => {
       path: "src/a.txt",
       content: "one\n",
     });
-    expect(create).toMatchObject({ status: "ok", path: "src/a.txt", file_created: true });
+    expect(create).toMatchObject({ status: "applied", path: "src/a.txt", file_created: true });
     expect(await read(root, "src/a.txt")).toBe("one\n");
 
     const guarded = await fileAction({
@@ -362,7 +498,7 @@ describe("fileAction", () => {
       content: "two\n",
       if_exists: "overwrite",
     });
-    expect(overwritten.status).toBe("ok");
+    expect(overwritten.status).toBe("applied");
     expect(await read(root, "src/a.txt")).toBe("two\n");
 
     const moved = await fileAction({
@@ -371,11 +507,11 @@ describe("fileAction", () => {
       path: "src/a.txt",
       new_path: "src/b.txt",
     });
-    expect(moved).toMatchObject({ status: "ok", path: "src/b.txt" });
+    expect(moved).toMatchObject({ status: "applied", path: "src/b.txt" });
     expect(await read(root, "src/b.txt")).toBe("two\n");
 
     const deleted = await fileAction({ roots: [root], action: "delete", path: "src/b.txt" });
-    expect(deleted).toMatchObject({ status: "ok", edits_applied: 1 });
+    expect(deleted).toMatchObject({ status: "applied", edits_applied: 1 });
     await expect(stat(join(root, "src/b.txt"))).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(resolveWorkspacePath([root], "../outside.txt")).toMatchObject({
@@ -388,6 +524,46 @@ describe("fileAction", () => {
       content: "x",
     });
     expect(outside).toMatchObject({ status: "error", error: { code: "outside_workspace" } });
+  });
+
+  it("hash-gates delete and move actions", async () => {
+    const root = await tempRoot("actions-stale");
+    await write(root, "src/delete.txt", "delete me\n");
+    await write(root, "src/move.txt", "move me\n");
+
+    const deletePreview = await applyFileEdits({
+      roots: [root],
+      path: "src/delete.txt",
+      rewrite: "delete me\n",
+      dry_run: true,
+    });
+    await write(root, "src/delete.txt", "changed\n");
+    const staleDelete = await fileAction({
+      roots: [root],
+      action: "delete",
+      path: "src/delete.txt",
+      expected_sha256: deletePreview.pre_sha256,
+    });
+    expect(staleDelete).toMatchObject({ status: "error", error: { code: "stale_file" } });
+    expect(await read(root, "src/delete.txt")).toBe("changed\n");
+
+    const movePreview = await applyFileEdits({
+      roots: [root],
+      path: "src/move.txt",
+      rewrite: "move me\n",
+      dry_run: true,
+    });
+    await write(root, "src/move.txt", "changed move\n");
+    const staleMove = await fileAction({
+      roots: [root],
+      action: "move",
+      path: "src/move.txt",
+      new_path: "src/moved.txt",
+      expected_sha256: movePreview.pre_sha256,
+    });
+    expect(staleMove).toMatchObject({ status: "error", error: { code: "stale_file" } });
+    expect(await read(root, "src/move.txt")).toBe("changed move\n");
+    await expect(stat(join(root, "src/moved.txt"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
 
@@ -408,7 +584,7 @@ describe("post-edit cache integration helpers", () => {
       replace: "after",
       config: defaultConfig,
     });
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("applied");
 
     catalog = await buildCatalog([root], defaultConfig);
     const structure = await getCodeStructures(catalog, defaultConfig, { paths: ["src/a.ts"] });
@@ -427,7 +603,7 @@ describe("reanchorIndentation divergent indents", () => {
       search: "  if flag:\n    old()",
       replace: "  if flag:\n    new_a()\n    if deep:\n      new_b()",
     });
-    expect(summary.status).toBe("ok");
+    expect(summary.status).toBe("applied");
     expect(summary.matched_by).toEqual(["fuzzy"]);
     const content = await read(root, "src/d.py");
     expect(content).toBe("def outer():\n\tif flag:\n\t  new_a()\n\t  if deep:\n\t    new_b()\n");

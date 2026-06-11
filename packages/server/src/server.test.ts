@@ -486,7 +486,7 @@ describe("rp-mini MCP server", () => {
       matched_by: string[];
       unified_diff: string;
     };
-    expect(fuzzyPayload.status).toBe("ok");
+    expect(fuzzyPayload.status).toBe("applied");
     expect(fuzzyPayload.matched_by).toEqual(["fuzzy"]);
     expect(fuzzyPayload.unified_diff).toContain("+  return value + 2;");
 
@@ -534,13 +534,58 @@ describe("rp-mini MCP server", () => {
     };
 
     expect(payload).toMatchObject({
-      status: "ok",
+      status: "applied",
       edits_applied: 3,
       matched_by: ["literal", "literal", "literal"],
     });
     expect(await readFile(join(root, "src", "batch.txt"), "utf8")).toBe(
       "zero\none\ntwo\nTHREE\nFIVE\n",
     );
+  });
+
+  it("serves dry_run preview and expected_sha256 apply over linked transport", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "a.txt"), "one\ntwo\nthree\n");
+    const { client } = await connectedClient({ roots: [root] });
+
+    const preview = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/a.txt",
+        search: "two",
+        replace: "TWO",
+        dry_run: true,
+      },
+    });
+    const previewPayload = JSON.parse(firstText(preview)) as {
+      status: string;
+      pre_sha256: string;
+      unified_diff: string;
+    };
+    expect(previewPayload.status).toBe("previewed");
+    expect(previewPayload.pre_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(previewPayload.unified_diff).toContain("+TWO");
+    expect(await readFile(join(root, "src", "a.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+
+    const applied = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/a.txt",
+        search: "two",
+        replace: "TWO",
+        expected_sha256: previewPayload.pre_sha256,
+      },
+    });
+    const appliedPayload = JSON.parse(firstText(applied)) as {
+      status: string;
+      verified: boolean;
+      post_sha256: string;
+      post_context: Array<{ text: string }>;
+    };
+    expect(appliedPayload.status).toBe("applied");
+    expect(appliedPayload.verified).toBe(true);
+    expect(appliedPayload.post_sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(appliedPayload.post_context[0]?.text).toContain("2: TWO");
   });
 
   it("updates selection tokens, invalidates stale slices, refreshes codemaps, and handles file_actions", async () => {
@@ -628,7 +673,7 @@ describe("rp-mini MCP server", () => {
         }),
       ),
     );
-    expect(created).toMatchObject({ status: "ok", file_created: true });
+    expect(created).toMatchObject({ status: "applied", file_created: true });
     const outside = JSON.parse(
       firstText(
         await client.callTool({
@@ -655,6 +700,89 @@ describe("rp-mini MCP server", () => {
       ),
     ) as { files: Array<{ path: string }> };
     expect(files.files.map((file) => file.path)).not.toContain("src/new.txt");
+  });
+
+  it("does not refresh selection or codemap state on dry_run but does on apply", async () => {
+    const root = await tempRoot();
+    await write(join(root, "src", "a.ts"), "export function before() { return 1; }\n");
+    const { client } = await connectedClient({
+      roots: [root],
+      sessionId: "dry-run-refresh",
+      config: { selection: { auto_codemaps: false } },
+    });
+
+    await client.callTool({
+      name: "manage_selection",
+      arguments: { op: "set", mode: "full", paths: ["src/a.ts"], view: "files" },
+    });
+    const beforeSelection = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "manage_selection",
+          arguments: { op: "get", view: "files" },
+        }),
+      ),
+    ) as { files: Array<{ tokens: { full: number } }> };
+
+    const beforeStructure = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "get_code_structure",
+          arguments: { paths: ["src/a.ts"] },
+        }),
+      ),
+    ) as { files: Array<{ text: string }> };
+    expect(beforeStructure.files[0]!.text).toContain("before");
+
+    await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/a.ts",
+        search: "before",
+        replace: "afterAndLongerNameWithEnoughExtraCharactersToChangeTokenCount",
+        dry_run: true,
+      },
+    });
+
+    const afterDrySelection = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "manage_selection",
+          arguments: { op: "get", view: "files" },
+        }),
+      ),
+    ) as { files: Array<{ tokens: { full: number } }> };
+    expect(afterDrySelection.files[0]!.tokens.full).toBe(beforeSelection.files[0]!.tokens.full);
+    expect(await readFile(join(root, "src", "a.ts"), "utf8")).toContain("before");
+
+    await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        path: "src/a.ts",
+        search: "before",
+        replace: "afterAndLongerNameWithEnoughExtraCharactersToChangeTokenCount",
+      },
+    });
+    const afterApplySelection = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "manage_selection",
+          arguments: { op: "get", view: "files" },
+        }),
+      ),
+    ) as { files: Array<{ tokens: { full: number } }> };
+    expect(afterApplySelection.files[0]!.tokens.full).toBeGreaterThan(
+      beforeSelection.files[0]!.tokens.full,
+    );
+    const afterStructure = JSON.parse(
+      firstText(
+        await client.callTool({
+          name: "get_code_structure",
+          arguments: { paths: ["src/a.ts"] },
+        }),
+      ),
+    ) as { files: Array<{ text: string }> };
+    expect(afterStructure.files[0]!.text).toContain("afterAndLongerName");
   });
 
   it("serves read-only git status and structured diff over linked transport", async () => {
