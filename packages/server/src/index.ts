@@ -48,6 +48,7 @@ export type ToolDefinition = {
 };
 
 const positiveInt = z.number().int().positive();
+const treeTokenCap = positiveInt.max(50_000);
 const nonNegativeInt = z.number().int().nonnegative();
 const rootArg = z
   .string()
@@ -96,12 +97,13 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "get_file_tree",
     description:
-      "Render workspace tree in auto/full/folders/selected mode, with max_depth and auto-trim target caps. Optional root targets another workspace root.",
+      "Render workspace tree in auto/full/folders/selected mode, with max_depth and max_tokens auto target caps. Optional root targets another workspace root.",
     inputSchema: z
       .object({
         root: rootArg,
         mode: z.enum(["auto", "full", "folders", "selected"]).default("auto"),
         max_depth: nonNegativeInt.optional(),
+        max_tokens: treeTokenCap.optional(),
         path: z.string().min(1).optional(),
       })
       .strict(),
@@ -495,15 +497,19 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
       const treeArgs = args as {
         mode?: "auto" | "full" | "folders" | "selected";
         max_depth?: number;
+        max_tokens?: number;
         path?: string;
       };
+      const selectionOptions =
+        treeArgs.mode === "selected" || treeArgs.mode === "auto"
+          ? selectedTreeOptions(await selectionState(context, catalog))
+          : {};
       return generateFileTree(catalog, config, {
         mode: treeArgs.mode,
         maxDepth: treeArgs.max_depth,
+        maxTokens: treeArgs.max_tokens,
         path: treeArgs.path,
-        ...(treeArgs.mode === "selected"
-          ? selectedTreeOptions(await selectionState(context, catalog))
-          : {}),
+        ...selectionOptions,
       });
     }
     case "get_code_structure": {

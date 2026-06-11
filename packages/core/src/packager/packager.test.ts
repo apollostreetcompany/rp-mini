@@ -199,6 +199,39 @@ describe("assemblePayload", () => {
     expect(diffOnly.text).not.toContain("<file_map>");
     expect(diffOnly.text).not.toContain("<file_contents>");
   });
+
+  it("budget-shapes exported file maps around selected anchors", async () => {
+    const root = await tempRoot("packager-tree-budget");
+    await write(join(root, "apps", "web", "src", "auth", "login", "route.ts"), "export {};\n");
+    for (let index = 0; index < 45; index += 1) {
+      await write(join(root, "apps", "web", "src", "noise", `screen-${index}.ts`), "export {};\n");
+    }
+    for (let index = 0; index < 20; index += 1) {
+      await write(join(root, "packages", `pkg-${index}`, "index.ts"), "export {};\n");
+    }
+    const config = withConfig({
+      caps: { tree_tokens: 120 },
+      selection: { persist: false, auto_codemaps: false },
+    });
+    const catalog = await buildCatalog([root], config);
+    const state = new SelectionState({ root, config, catalog, sessionId: "packager-tree-budget" });
+    await state.add([{ path: "apps/web/src/auth/login/route.ts", mode: "full" }]);
+    await state.setPrompt("Review auth route.");
+
+    const payload = await assemblePayload(state.snapshot(), config, {
+      root,
+      catalog,
+      preset: "review",
+      readFile: async () => "export {};\n",
+      now: () => new Date("2026-06-10T00:00:00.000Z"),
+    });
+
+    expect(payload.text).toContain("<file_map>");
+    expect(payload.text).toContain("route.ts * +");
+    expect(payload.text).toContain("noise");
+    expect(payload.text).toMatch(/packages\/ \u2026 \(\d+ dirs/);
+    expect(payload.tokenBreakdown.file_tree).toBeLessThanOrEqual(config.caps.tree_tokens + 5);
+  });
 });
 
 function normalizeTempTreeName(text: string): string {

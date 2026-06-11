@@ -134,6 +134,34 @@ describe("rp-mini MCP server", () => {
     expect(firstText(tree)).toContain("src");
   });
 
+  it("accepts get_file_tree max_tokens and rejects invalid values through schema validation", async () => {
+    const root = await tempRoot();
+    for (let index = 0; index < 35; index += 1) {
+      await write(join(root, "src", "noise", `file-${index}.ts`), "export {};\n");
+    }
+    await write(join(root, "src", "auth", "route.ts"), "export {};\n");
+    const { client } = await connectedClient({ roots: [root] });
+
+    const valid = await client.callTool({
+      name: "get_file_tree",
+      arguments: { mode: "auto", max_tokens: 90, path: "src/auth" },
+    });
+    expect(JSON.parse(firstText(valid))).toMatchObject({ limit_hit: false });
+    expect(firstText(valid)).toContain("route.ts");
+
+    const zero = await client.callTool({
+      name: "get_file_tree",
+      arguments: { mode: "auto", max_tokens: 0 },
+    });
+    expect(firstText(zero)).toContain("Input validation error");
+
+    const tooLarge = await client.callTool({
+      name: "get_file_tree",
+      arguments: { mode: "auto", max_tokens: 50_001 },
+    });
+    expect(firstText(tooLarge)).toContain("Input validation error");
+  });
+
   it("serves real get_code_structure with cap metadata over the linked transport", async () => {
     const root = await tempRoot();
     await write(

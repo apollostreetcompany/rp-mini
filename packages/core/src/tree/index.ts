@@ -9,6 +9,7 @@ export type FileTreeMode = "auto" | "full" | "folders" | "selected";
 export interface FileTreeOptions {
   mode?: FileTreeMode;
   maxDepth?: number;
+  maxTokens?: number;
   path?: string;
   selectedPaths?: string[];
   codemapPaths?: string[];
@@ -35,7 +36,39 @@ interface Node {
   assetCatalog?: boolean;
   codemapAvailable?: boolean;
   selected?: boolean;
+  fileCount: number;
+  dirCount: number;
+  anchorSelf?: boolean;
+  anchorDescendant?: boolean;
+  heuristicAnchor?: boolean;
 }
+
+interface RenderProfile {
+  mode: Exclude<FileTreeMode, "auto">;
+  depthLimit?: number;
+  collapseDistantAt?: number;
+  selectedOnly?: boolean;
+  name: string;
+}
+
+const SOURCE_DIR_NAMES = new Set([
+  "app",
+  "apps",
+  "bin",
+  "cli",
+  "client",
+  "cmd",
+  "core",
+  "lib",
+  "package",
+  "packages",
+  "server",
+  "src",
+  "source",
+  "sources",
+  "test",
+  "tests",
+]);
 
 export function generateFileTree(
   catalog: FileCatalog,
@@ -49,33 +82,85 @@ export function generateFileTree(
   }
 
   if (mode === "auto") {
-    const maxDepth = maxCatalogDepth(catalog);
-    for (let depth = maxDepth; depth >= 0; depth -= 1) {
-      const rendered = renderCatalog(catalog, config, {
-        ...options,
-        mode: "full",
-        maxDepth: depth,
-      });
-      if (estimateTokens(rendered.tree) <= config.caps.tree_tokens || depth === 0) {
-        const truncated = depth < maxDepth;
-        return {
-          ...rendered,
-          limit_hit: truncated,
-          wasTruncated: truncated,
-          chosenDepth: depth,
-          ...(truncated ? { suggestion: "Use max_depth or path to focus the tree." } : {}),
-        };
-      }
-    }
+    return renderAuto(catalog, config, options);
   }
 
   return renderCatalog(catalog, config, options);
+}
+
+function renderAuto(
+  catalog: FileCatalog,
+  config: Config,
+  options: FileTreeOptions,
+): FileTreeResult {
+  const budget = options.maxTokens ?? config.caps.tree_tokens;
+  const full = renderCatalog(catalog, config, { ...options, mode: "full" });
+  if (estimateTokens(full.tree) <= budget) return full;
+
+  const maxDepth = maxCatalogDepth(catalog);
+  const depth3 = options.maxDepth === undefined ? 3 : Math.min(3, options.maxDepth);
+  const profiles: RenderProfile[] = [
+    { mode: "full", collapseDistantAt: 4, name: "full summarized distant depth >= 4" },
+    { mode: "full", depthLimit: depth3, name: `full depth cap ${depth3}` },
+    {
+      mode: "folders",
+      collapseDistantAt: 4,
+      name: "directory-only view; selected files shown",
+    },
+    {
+      mode: "folders",
+      depthLimit: depth3,
+      name: `directory-only view; depth cap ${depth3}; selected files shown`,
+    },
+    {
+      mode: "selected",
+      selectedOnly: true,
+      name: "selected-only view with summarized root coverage",
+    },
+  ];
+
+  for (const profile of profiles) {
+    const rendered = renderCatalog(
+      catalog,
+      config,
+      {
+        ...options,
+        mode: profile.mode,
+        maxDepth: profile.depthLimit,
+      },
+      profile,
+    );
+    if (estimateTokens(rendered.tree) <= budget) {
+      return {
+        ...rendered,
+        limit_hit: true,
+        wasTruncated: true,
+        chosenDepth: profile.depthLimit ?? maxDepth,
+        suggestion: `Auto tree used ${profile.name}. Use max_tokens, max_depth, or path to reshape.`,
+      };
+    }
+  }
+
+  const fallback = renderCatalog(
+    catalog,
+    config,
+    { ...options, mode: "selected" },
+    { mode: "selected", selectedOnly: true, collapseDistantAt: 1, name: "root summaries" },
+  );
+  return {
+    ...fallback,
+    limit_hit: true,
+    wasTruncated: true,
+    chosenDepth: 0,
+    suggestion: "Auto tree fell back to root summaries plus selected anchors.",
+  };
 }
 
 function renderCatalog(
   catalog: FileCatalog,
   config: Config,
   options: FileTreeOptions,
+  profile?: RenderProfile,
 ): FileTreeResult {
   const maxDepth = options.maxDepth;
   const rootLines = catalog.roots.flatMap((root) => {
@@ -92,7 +177,7 @@ function renderCatalog(
         dir.relativePath.endsWith(".xcassets"),
       );
     }
-    if (options.mode !== "folders") {
+    if (options.mode !== "folders" || profile !== undefined) {
       for (const file of root.files) {
         if (!insideBase(file.relativePath, basePath)) continue;
         if (
@@ -113,7 +198,9 @@ function renderCatalog(
       }
     }
     if (basePath) tree.name = basePath.split("/").at(-1) ?? tree.name;
-    return renderNode(tree, "", true, 0, maxDepth);
+    finalizeCounts(tree);
+    markAnchors(tree, selectedPaths, codemapPaths, Boolean(basePath));
+    return renderNode(tree, "", true, 0, maxDepth, profile);
   });
   return {
     tree: `(+ denotes codemap available)\n${rootLines.join("\n")}\n`,
@@ -124,7 +211,7 @@ function renderCatalog(
 }
 
 function buildRoot(path: string, name: string): Node {
-  return { name, path, kind: "dir", children: new Map() };
+  return { name, path, kind: "dir", children: new Map(), fileCount: 0, dirCount: 0 };
 }
 
 function addPath(
@@ -148,6 +235,8 @@ function addPath(
         path: [...parts.slice(0, index), part].join("/"),
         kind: childKind,
         children: new Map(),
+        fileCount: 0,
+        dirCount: 0,
       };
       cursor.children.set(part, child);
     }
@@ -167,20 +256,139 @@ function renderNode(
   isLast: boolean,
   depth: number,
   maxDepth: number | undefined,
+  profile?: RenderProfile,
 ): string[] {
-  const label = `${node.name}${node.assetCatalog ? " (asset catalog)" : ""}${node.selected ? " *" : ""}${node.codemapAvailable ? " +" : ""}`;
+  const label = labelForNode(node, profile);
   const line = depth === 0 ? label : `${prefix}${isLast ? "└── " : "├── "}${label}`;
-  if (maxDepth !== undefined && depth >= maxDepth) return [line];
-  const children = [...node.children.values()].sort(
-    (a, b) => Number(a.kind === "file") - Number(b.kind === "file") || a.name.localeCompare(b.name),
-  );
+  const children = visibleChildren(node, profile);
+  const overDepth = maxDepth !== undefined && depth >= maxDepth;
+  const collapseDistant =
+    profile?.collapseDistantAt !== undefined &&
+    depth >= profile.collapseDistantAt &&
+    node.kind === "dir" &&
+    !node.anchorDescendant &&
+    !node.anchorSelf;
+  if (
+    (overDepth || collapseDistant) &&
+    node.kind === "dir" &&
+    !node.anchorDescendant &&
+    !node.anchorSelf &&
+    node.fileCount + node.dirCount > 0
+  ) {
+    return [summaryLine(node, prefix, isLast, depth)];
+  }
+  if ((overDepth || collapseDistant) && children.length > 0) {
+    const selected = children.filter((child) => child.anchorSelf || child.anchorDescendant);
+    const hasOther = children.length > selected.length;
+    if (selected.length === 0) return [summaryLine(node, prefix, isLast, depth)];
+    const childPrefix = depth === 0 ? "" : `${prefix}${isLast ? "    " : "│   "}`;
+    return [
+      line,
+      ...selected.flatMap((child, index) =>
+        renderNode(
+          child,
+          childPrefix,
+          !hasOther && index === selected.length - 1,
+          depth + 1,
+          undefined,
+          profile,
+        ),
+      ),
+      ...(hasOther
+        ? [`${childPrefix}${selected.length === 0 ? "└── " : "├── "}${summaryLabel(node)}`]
+        : []),
+    ];
+  }
   const childPrefix = depth === 0 ? "" : `${prefix}${isLast ? "    " : "│   "}`;
   return [
     line,
     ...children.flatMap((child, index) =>
-      renderNode(child, childPrefix, index === children.length - 1, depth + 1, maxDepth),
+      renderNode(child, childPrefix, index === children.length - 1, depth + 1, maxDepth, profile),
     ),
   ];
+}
+
+function visibleChildren(node: Node, profile?: RenderProfile): Node[] {
+  const children = [...node.children.values()].filter((child) => {
+    if (profile?.selectedOnly) {
+      if (node.anchorDescendant) return true;
+      return child.anchorSelf || child.anchorDescendant || child.heuristicAnchor;
+    }
+    if (profile?.mode === "folders") {
+      return child.kind === "dir" || child.selected;
+    }
+    return true;
+  });
+  return children.sort(
+    (a, b) => Number(a.kind === "file") - Number(b.kind === "file") || a.name.localeCompare(b.name),
+  );
+}
+
+function labelForNode(node: Node, profile?: RenderProfile): string {
+  if (
+    node.kind === "dir" &&
+    profile !== undefined &&
+    !node.anchorSelf &&
+    !node.anchorDescendant &&
+    node.fileCount + node.dirCount > 0
+  ) {
+    return `${node.name}/ ${summaryLabel(node)}`;
+  }
+  return `${node.name}${node.assetCatalog ? " (asset catalog)" : ""}${node.selected ? " *" : ""}${node.codemapAvailable ? " +" : ""}`;
+}
+
+function summaryLine(node: Node, prefix: string, isLast: boolean, depth: number): string {
+  const label = `${node.name}/ ${summaryLabel(node)}`;
+  return depth === 0 ? label : `${prefix}${isLast ? "└── " : "├── "}${label}`;
+}
+
+function summaryLabel(node: Node): string {
+  const parts = [];
+  if (node.fileCount > 0)
+    parts.push(`${node.fileCount} ${node.fileCount === 1 ? "file" : "files"}`);
+  if (node.dirCount > 0) parts.push(`${node.dirCount} ${node.dirCount === 1 ? "dir" : "dirs"}`);
+  return `… (${parts.join(", ") || "empty"})`;
+}
+
+function finalizeCounts(node: Node): { files: number; dirs: number } {
+  if (node.kind === "file") {
+    node.fileCount = 1;
+    node.dirCount = 0;
+    return { files: 1, dirs: 0 };
+  }
+  let files = 0;
+  let dirs = 0;
+  for (const child of node.children.values()) {
+    const counts = finalizeCounts(child);
+    files += counts.files;
+    dirs += counts.dirs + (child.kind === "dir" ? 1 : 0);
+  }
+  node.fileCount = files;
+  node.dirCount = dirs;
+  return { files, dirs };
+}
+
+function markAnchors(
+  root: Node,
+  selectedPaths: Set<string>,
+  codemapPaths: Set<string>,
+  pathAnchor: boolean,
+): boolean {
+  const explicitAnchors = new Set([...selectedPaths, ...codemapPaths]);
+  function visit(node: Node, depth: number): boolean {
+    node.anchorSelf = explicitAnchors.has(node.path) || (pathAnchor && depth === 0);
+    node.heuristicAnchor =
+      node.kind === "dir" &&
+      (depth === 1 ||
+        (explicitAnchors.size === 0 && SOURCE_DIR_NAMES.has(node.name.toLowerCase())));
+    let descendant = false;
+    for (const child of node.children.values()) {
+      if (visit(child, depth + 1)) descendant = true;
+    }
+    node.anchorDescendant = descendant;
+    return Boolean(node.anchorSelf || node.heuristicAnchor || descendant);
+  }
+  return visit(root, 0);
 }
 
 function maxCatalogDepth(catalog: FileCatalog): number {
