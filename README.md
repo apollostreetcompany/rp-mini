@@ -31,12 +31,14 @@ node packages/server/dist/cli.js search /path/to/workspace ContextBuilder --max-
 node packages/server/dist/cli.js read /path/to/workspace Sources/App.ts --start-line 40 --limit 80
 node packages/server/dist/cli.js tree /path/to/workspace --mode folders --max-depth 3
 node packages/server/dist/cli.js structure /path/to/workspace Sources/App.ts
+node packages/server/dist/cli.js serve --profile explorer --root /path/to/workspace
 ```
 
 Common wrappers cover search, read, tree, structure, selection, prompt/context packaging, git, edits, file actions, token counting, and indexing. Any MCP tool can also be invoked directly:
 
 ```sh
 node packages/server/dist/cli.js tool /path/to/workspace file_search --json-args '{"pattern":"ContextBuilder","max_results":10}'
+node packages/server/dist/cli.js tool /path/to/workspace apply_edits --profile explorer --json-args '{"path":"src/a.ts","search":"old","replace":"new","dry_run":true}'
 ```
 
 ## Configuration
@@ -46,6 +48,7 @@ Config layers are defaults, `~/.config/rp-mini/config.json`, workspace `rp-mini.
 | Key | Default | Effect |
 | --- | --- | --- |
 | `roots` | `["."]` | Workspace roots served by the MCP process. |
+| `profile` | `full` | Role profile: `full`, `editor`, or `explorer`. |
 | `tokenizer` | `heuristic` | Token estimator used for budgets and context receipts. |
 | `budgets.discovery` | `160000` | Default discovery/export budget. |
 | `budgets.plan` | `120000` | Planning preset budget. |
@@ -82,9 +85,21 @@ Config layers are defaults, `~/.config/rp-mini/config.json`, workspace `rp-mini.
 
 Environment variables use the `RP_MINI_` prefix; see `packages/core/src/config/index.ts` for exact names.
 
+## Role Profiles
+
+Profiles make a server process announce and enforce its role. Launch one process per role: start an explorer with `rp-mini serve --profile explorer --root /path/to/workspace`, and start a separate editor/full process when mutation tools should be available.
+
+| Profile | Tool surface |
+| --- | --- |
+| `full` | All tools, clamped by `tools.*` booleans. |
+| `editor` | Same surface as `full` today, kept distinct so hosts can pin intent and future tools can diverge. |
+| `explorer` | Read-only exploration and context tools; `apply_edits` and `file_actions` are disabled. `git` remains available because it is read-only. |
+
+Profiles compose with `tools.*` as a clamp: a tool is enabled only when the active profile allows it and the matching `tools.*` boolean is true. Disabled tools remain visible in MCP tool listings and return structured payloads such as `tool_disabled_by_profile` or `tool_disabled_by_config` instead of disappearing. `workspace_context` includes `server.profile`, `server.tools_enabled`, and `server.tools_disabled`, and the MCP server instructions include the same active profile and disabled-tool reasons. `RP_MINI_PROFILE` sets the environment profile; `serve --profile <name>` or wrapper `--profile <name>` wins over environment and config files.
+
 ## Tools
 
-Every MCP tool accepts optional `root`, an absolute workspace path that targets that single call without rebinding the server process.
+Every MCP tool accepts optional `root`, an absolute workspace path that targets that single call without rebinding the server process. Profile is process-level and clamps every targeted workspace: an `explorer` process can read any allowed root, but mutation tools refuse with `tool_disabled_by_profile` even if the target workspace's own config enables them.
 
 | Tool | Purpose |
 | --- | --- |

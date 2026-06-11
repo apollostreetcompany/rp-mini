@@ -16,22 +16,22 @@ import { createRpMiniServer, runRpMiniTool, toolDefinitions } from "./index.js";
 
 const HELP = `Usage:
   rp-mini --help | help
-  rp-mini serve [--root <path>]...
+  rp-mini serve [--profile full|editor|explorer] [--root <path>]...
   rp-mini index [root...]
 
 Shell wrappers:
-  rp-mini search <root> <pattern> [--mode auto|path|content|both] [--regex] [--whole-word] [--context-lines N] [--max-results N] [--paths a,b] [--extensions .ts,.tsx] [--exclude pattern]
-  rp-mini read <root> <path> [--start-line N] [--limit N] [--json]
-  rp-mini tree <root> [--mode auto|full|folders|selected] [--max-depth N] [--path path] [--json]
-  rp-mini structure <root> <path...> [--max-results N] [--json]
-  rp-mini select <root> <get|add|remove|set|clear|promote|demote|save_profile|load_profile|list_profiles> [path...] [--mode full|slices|codemap_only] [--view summary|files|content|codemaps] [--name name] [--session id] [--json]
-  rp-mini context <root> [snapshot|export] [--include prompt,selection,code,files,tree,tokens,git_diff] [--preset name] [--response-type type] [--git-compare spec] [--session id] [--json]
-  rp-mini prompt <root> <get|set|append|clear> [text] [--session id] [--json]
-  rp-mini git <root> <status|diff|log|show|blame> [--compare spec] [--detail summary|files|patches|full] [--path path] [--count N] [--start-line N] [--end-line N] [--revspec rev]
-  rp-mini edit <root> <path> (--rewrite text | --search text --replace text) [--all] [--on-missing error|create] [--verbose] [--json]
-  rp-mini file-action <root> <create|delete|move> <path> [--content text] [--new-path path] [--if-exists error|overwrite] [--json]
+  rp-mini search <root> <pattern> [--profile full|editor|explorer] [--mode auto|path|content|both] [--regex] [--whole-word] [--context-lines N] [--max-results N] [--paths a,b] [--extensions .ts,.tsx] [--exclude pattern]
+  rp-mini read <root> <path> [--profile full|editor|explorer] [--start-line N] [--limit N] [--json]
+  rp-mini tree <root> [--profile full|editor|explorer] [--mode auto|full|folders|selected] [--max-depth N] [--path path] [--json]
+  rp-mini structure <root> <path...> [--profile full|editor|explorer] [--max-results N] [--json]
+  rp-mini select <root> <get|add|remove|set|clear|promote|demote|save_profile|load_profile|list_profiles> [path...] [--profile full|editor|explorer] [--mode full|slices|codemap_only] [--view summary|files|content|codemaps] [--name name] [--session id] [--json]
+  rp-mini context <root> [snapshot|export] [--profile full|editor|explorer] [--include prompt,selection,code,files,tree,tokens,git_diff] [--preset name] [--response-type type] [--git-compare spec] [--session id] [--json]
+  rp-mini prompt <root> <get|set|append|clear> [text] [--profile full|editor|explorer] [--session id] [--json]
+  rp-mini git <root> <status|diff|log|show|blame> [--profile full|editor|explorer] [--compare spec] [--detail summary|files|patches|full] [--path path] [--count N] [--start-line N] [--end-line N] [--revspec rev]
+  rp-mini edit <root> <path> [--profile full|editor|explorer] (--rewrite text | --search text --replace text) [--all] [--on-missing error|create] [--verbose] [--json]
+  rp-mini file-action <root> <create|delete|move> <path> [--profile full|editor|explorer] [--content text] [--new-path path] [--if-exists error|overwrite] [--json]
   rp-mini tokens <text...> | rp-mini tokens --file <path>
-  rp-mini tool <root> <tool-name> --json-args '{"key":"value"}' [--session id]
+  rp-mini tool <root> <tool-name> --json-args '{"key":"value"}' [--profile full|editor|explorer] [--session id]
 
 MCP tools available through "tool":
   ${toolDefinitions.map((tool) => tool.name).join(", ")}
@@ -70,9 +70,13 @@ async function main(argv: string[]): Promise<void> {
 }
 
 async function serve(args: string[]): Promise<void> {
+  const parsed = parseCliArgs(args);
   const roots = parseRoots(args);
   const rootDir = roots[0] ?? process.cwd();
-  const config = await loadConfig(rootDir, { roots });
+  const config = await loadConfig(
+    rootDir,
+    compactDeep({ roots, profile: flagString(parsed, "profile") }) as DeepPartial<Config>,
+  );
   const server = createRpMiniServer({ config });
   await server.connect(new StdioServerTransport());
 }
@@ -95,20 +99,26 @@ async function search(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, new Set(["json", "regex", "whole-word"]));
   const [root, pattern] = parsed.positionals;
   if (!root || !pattern) throw new Error("search requires <root> and <pattern>.");
-  const result = await runLoadedTool(root, "file_search", {
-    pattern,
-    mode: flagString(parsed, "mode"),
-    regex: flagBoolean(parsed, "regex"),
-    whole_word: flagBoolean(parsed, "whole-word"),
-    context_lines: flagNumber(parsed, "context-lines"),
-    max_results: flagNumber(parsed, "max-results"),
-    filters: compactObject({
-      paths: flagCsv(parsed, "paths"),
-      extensions: flagCsv(parsed, "extensions"),
-      exclude: flagCsv(parsed, "exclude"),
-    }),
-    contextPaths: flagCsv(parsed, "context-paths"),
-  });
+  const result = await runLoadedTool(
+    root,
+    "file_search",
+    {
+      pattern,
+      mode: flagString(parsed, "mode"),
+      regex: flagBoolean(parsed, "regex"),
+      whole_word: flagBoolean(parsed, "whole-word"),
+      context_lines: flagNumber(parsed, "context-lines"),
+      max_results: flagNumber(parsed, "max-results"),
+      filters: compactObject({
+        paths: flagCsv(parsed, "paths"),
+        extensions: flagCsv(parsed, "extensions"),
+        exclude: flagCsv(parsed, "exclude"),
+      }),
+      contextPaths: flagCsv(parsed, "context-paths"),
+    },
+    undefined,
+    flagString(parsed, "profile"),
+  );
   if (flagBoolean(parsed, "json")) {
     printJson(result);
   } else {
@@ -120,11 +130,17 @@ async function read(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, new Set(["json"]));
   const [root, path] = parsed.positionals;
   if (!root || !path) throw new Error("read requires <root> and <path>.");
-  const result = await runLoadedTool(root, "read_file", {
-    path,
-    start_line: flagNumber(parsed, "start-line"),
-    limit: flagNumber(parsed, "limit"),
-  });
+  const result = await runLoadedTool(
+    root,
+    "read_file",
+    {
+      path,
+      start_line: flagNumber(parsed, "start-line"),
+      limit: flagNumber(parsed, "limit"),
+    },
+    undefined,
+    flagString(parsed, "profile"),
+  );
   if (flagBoolean(parsed, "json")) {
     printJson(result);
     return;
@@ -137,11 +153,17 @@ async function tree(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, new Set(["json"]));
   const [root] = parsed.positionals;
   if (!root) throw new Error("tree requires <root>.");
-  const result = await runLoadedTool(root, "get_file_tree", {
-    mode: flagString(parsed, "mode"),
-    max_depth: flagNumber(parsed, "max-depth"),
-    path: flagString(parsed, "path"),
-  });
+  const result = await runLoadedTool(
+    root,
+    "get_file_tree",
+    {
+      mode: flagString(parsed, "mode"),
+      max_depth: flagNumber(parsed, "max-depth"),
+      path: flagString(parsed, "path"),
+    },
+    undefined,
+    flagString(parsed, "profile"),
+  );
   if (flagBoolean(parsed, "json")) {
     printJson(result);
     return;
@@ -154,10 +176,16 @@ async function structure(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, new Set(["json"]));
   const [root, ...paths] = parsed.positionals;
   if (!root || paths.length === 0) throw new Error("structure requires <root> and <path...>.");
-  const result = await runLoadedTool(root, "get_code_structure", {
-    paths,
-    max_results: flagNumber(parsed, "max-results"),
-  });
+  const result = await runLoadedTool(
+    root,
+    "get_code_structure",
+    {
+      paths,
+      max_results: flagNumber(parsed, "max-results"),
+    },
+    undefined,
+    flagString(parsed, "profile"),
+  );
   if (flagBoolean(parsed, "json")) {
     printJson(result);
     return;
@@ -185,6 +213,7 @@ async function select(args: string[]): Promise<void> {
       strict: flagBoolean(parsed, "strict"),
     },
     flagString(parsed, "session"),
+    flagString(parsed, "profile"),
   );
   printJson(result);
 }
@@ -204,6 +233,7 @@ async function context(args: string[]): Promise<void> {
       git_compare: flagString(parsed, "git-compare"),
     },
     flagString(parsed, "session"),
+    flagString(parsed, "profile"),
   );
   printJson(result);
 }
@@ -217,6 +247,7 @@ async function prompt(args: string[]): Promise<void> {
     "prompt",
     { op, text: textParts.join(" ") || flagString(parsed, "text") },
     flagString(parsed, "session"),
+    flagString(parsed, "profile"),
   );
   if (flagBoolean(parsed, "json")) {
     printJson(result);
@@ -230,16 +261,22 @@ async function git(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, new Set(["json"]));
   const [root, op] = parsed.positionals;
   if (!root || !op) throw new Error("git requires <root> and <op>.");
-  const result = await runLoadedTool(root, "git", {
-    op,
-    compare: flagString(parsed, "compare"),
-    detail: flagString(parsed, "detail"),
-    path: flagString(parsed, "path"),
-    count: flagNumber(parsed, "count"),
-    start_line: flagNumber(parsed, "start-line"),
-    end_line: flagNumber(parsed, "end-line"),
-    revspec: flagString(parsed, "revspec"),
-  });
+  const result = await runLoadedTool(
+    root,
+    "git",
+    {
+      op,
+      compare: flagString(parsed, "compare"),
+      detail: flagString(parsed, "detail"),
+      path: flagString(parsed, "path"),
+      count: flagNumber(parsed, "count"),
+      start_line: flagNumber(parsed, "start-line"),
+      end_line: flagNumber(parsed, "end-line"),
+      revspec: flagString(parsed, "revspec"),
+    },
+    undefined,
+    flagString(parsed, "profile"),
+  );
   printJson(result);
 }
 
@@ -247,15 +284,21 @@ async function edit(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, new Set(["json", "all", "verbose"]));
   const [root, path] = parsed.positionals;
   if (!root || !path) throw new Error("edit requires <root> and <path>.");
-  const result = await runLoadedTool(root, "apply_edits", {
-    path,
-    search: flagString(parsed, "search"),
-    replace: flagString(parsed, "replace"),
-    rewrite: flagString(parsed, "rewrite"),
-    all: flagBoolean(parsed, "all"),
-    on_missing: flagString(parsed, "on-missing"),
-    verbose: flagBoolean(parsed, "verbose"),
-  });
+  const result = await runLoadedTool(
+    root,
+    "apply_edits",
+    {
+      path,
+      search: flagString(parsed, "search"),
+      replace: flagString(parsed, "replace"),
+      rewrite: flagString(parsed, "rewrite"),
+      all: flagBoolean(parsed, "all"),
+      on_missing: flagString(parsed, "on-missing"),
+      verbose: flagBoolean(parsed, "verbose"),
+    },
+    undefined,
+    flagString(parsed, "profile"),
+  );
   printJson(result);
 }
 
@@ -263,13 +306,19 @@ async function fileAction(args: string[]): Promise<void> {
   const parsed = parseCliArgs(args, new Set(["json"]));
   const [root, action, path] = parsed.positionals;
   if (!root || !action || !path) throw new Error("file-action requires <root> <action> <path>.");
-  const result = await runLoadedTool(root, "file_actions", {
-    action,
-    path,
-    content: flagString(parsed, "content"),
-    new_path: flagString(parsed, "new-path"),
-    if_exists: flagString(parsed, "if-exists"),
-  });
+  const result = await runLoadedTool(
+    root,
+    "file_actions",
+    {
+      action,
+      path,
+      content: flagString(parsed, "content"),
+      new_path: flagString(parsed, "new-path"),
+      if_exists: flagString(parsed, "if-exists"),
+    },
+    undefined,
+    flagString(parsed, "profile"),
+  );
   printJson(result);
 }
 
@@ -290,6 +339,7 @@ async function tool(args: string[]): Promise<void> {
     toolName,
     JSON.parse(rawJson),
     flagString(parsed, "session"),
+    flagString(parsed, "profile"),
   );
   printJson(result);
 }
@@ -299,9 +349,13 @@ async function runLoadedTool(
   toolName: string,
   args: unknown,
   sessionId?: string,
+  profile?: string,
 ): Promise<unknown> {
   const absoluteRoot = resolve(root);
-  const config = await loadConfig(absoluteRoot, { roots: [absoluteRoot] });
+  const config = await loadConfig(
+    absoluteRoot,
+    compactDeep({ roots: [absoluteRoot], profile }) as DeepPartial<Config>,
+  );
   return runRpMiniTool(toolName, compactDeep(args), {
     config: config as DeepPartial<Config>,
     roots: [absoluteRoot],
@@ -412,6 +466,7 @@ function assertNoToolError(result: unknown): void {
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
+  if (hasToolError(value)) process.exitCode = 1;
 }
 
 function printSearch(result: unknown): void {
@@ -439,6 +494,15 @@ function printSearch(result: unknown): void {
       `limit_hit: omitted ${search.omitted_total ?? 0}. ${search.suggestion ?? ""}`.trim(),
     );
   }
+}
+
+function hasToolError(value: unknown): boolean {
+  return !!(
+    value &&
+    typeof value === "object" &&
+    "error" in value &&
+    (value as { error?: unknown }).error
+  );
 }
 
 main(process.argv.slice(2)).catch((error: unknown) => {

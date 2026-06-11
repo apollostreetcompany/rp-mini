@@ -19,6 +19,14 @@ describe("loadConfig", () => {
     ).resolves.toEqual(defaultConfig);
   });
 
+  it("defaults to the full role profile", async () => {
+    const rootDir = await tempRoot();
+
+    const config = await loadConfig(rootDir, undefined, { env: {}, homeDir: await tempRoot() });
+
+    expect(config.profile).toBe("full");
+  });
+
   it("merges defaults <- user <- workspace <- env <- per-call overrides", async () => {
     const rootDir = await tempRoot();
     const homeDir = await tempRoot();
@@ -26,6 +34,7 @@ describe("loadConfig", () => {
     await writeFile(
       join(homeDir, ".config", "rp-mini", "config.json"),
       JSON.stringify({
+        profile: "explorer",
         budgets: { discovery: 100 },
         tools: { git: false },
         presets: { custom: { include_files: false } },
@@ -34,6 +43,7 @@ describe("loadConfig", () => {
     await writeFile(
       join(rootDir, "rp-mini.config.json"),
       JSON.stringify({
+        profile: "editor",
         budgets: { plan: 200 },
         tools: { file_actions: false },
         concurrency: { search_max: 9 },
@@ -42,10 +52,11 @@ describe("loadConfig", () => {
 
     const config = await loadConfig(
       rootDir,
-      { budgets: { discovery: 400 }, tools: { apply_edits: false } },
+      { profile: "full", budgets: { discovery: 400 }, tools: { apply_edits: false } },
       {
         homeDir,
         env: {
+          RP_MINI_PROFILE: "explorer",
           RP_MINI_BUDGETS_PLAN: "300",
           RP_MINI_TOOLS_GIT: "true",
           RP_MINI_CONCURRENCY_HYDRATE: "7",
@@ -56,6 +67,7 @@ describe("loadConfig", () => {
     );
 
     expect(config.budgets).toEqual({ discovery: 400, plan: 300 });
+    expect(config.profile).toBe("full");
     expect(config.dynamic_roots).toEqual({ enabled: true, max: 4 });
     expect(config.tools).toMatchObject({
       apply_edits: false,
@@ -105,5 +117,25 @@ describe("loadConfig", () => {
 
     expect(defaultConfig.dynamic_roots).toEqual({ enabled: true, max: 4 });
     expect(config.dynamic_roots).toEqual({ enabled: true, max: 6 });
+  });
+
+  it("loads profile from env over workspace config", async () => {
+    const rootDir = await tempRoot();
+    await writeFile(join(rootDir, "rp-mini.config.json"), JSON.stringify({ profile: "editor" }));
+
+    const config = await loadConfig(rootDir, undefined, {
+      env: { RP_MINI_PROFILE: "explorer" },
+      homeDir: await tempRoot(),
+    });
+
+    expect(config.profile).toBe("explorer");
+  });
+
+  it("rejects invalid profile values", async () => {
+    const rootDir = await tempRoot();
+
+    await expect(
+      loadConfig(rootDir, { profile: "writer" } as never, { env: {}, homeDir: await tempRoot() }),
+    ).rejects.toThrow("Invalid profile config: writer");
   });
 });

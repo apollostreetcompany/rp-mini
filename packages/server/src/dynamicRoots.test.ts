@@ -166,6 +166,55 @@ describe("dynamic MCP roots", () => {
     expect(await readFile(join(tempA, "src", "only-a.txt"), "utf8")).toBe("alpha\n");
   });
 
+  it("clamps explorer profile across dynamic roots: reads flow, mutations refuse", async () => {
+    const tempA = await tempRoot();
+    const tempB = await tempRoot();
+    await write(join(tempA, "src", "only-a.txt"), "alpha\n");
+    await write(
+      join(tempB, "rp-mini.config.json"),
+      JSON.stringify({ profile: "full", tools: { apply_edits: true } }),
+    );
+    await write(join(tempB, "src", "only-b.txt"), "one\ntwo\nthree\n");
+    const { client } = await connectedClient({
+      roots: [tempA],
+      config: { profile: "explorer", dynamic_roots: { enabled: true } },
+    });
+
+    const read = await client.callTool({
+      name: "read_file",
+      arguments: { root: tempB, path: "src/only-b.txt" },
+    });
+    expect(JSON.parse(firstText(read))).toMatchObject({ content: "one\ntwo\nthree\n" });
+
+    const search = await client.callTool({
+      name: "file_search",
+      arguments: { root: tempB, pattern: "two", mode: "content" },
+    });
+    expect(
+      JSON.parse(firstText(search)).matches.map((match: { path: string }) => match.path),
+    ).toEqual(["src/only-b.txt"]);
+
+    const edit = await client.callTool({
+      name: "apply_edits",
+      arguments: {
+        root: tempB,
+        path: "src/only-b.txt",
+        search: "two",
+        replace: "TWO",
+        dry_run: true,
+      },
+    });
+    expect(JSON.parse(firstText(edit))).toMatchObject({
+      error: {
+        code: "tool_disabled_by_profile",
+        profile: "explorer",
+        tool: "apply_edits",
+      },
+    });
+
+    expect(await readFile(join(tempB, "src", "only-b.txt"), "utf8")).toBe("one\ntwo\nthree\n");
+  });
+
   it("returns structured errors for invalid or disabled dynamic roots", async () => {
     const tempA = await tempRoot();
     const missing = join(tempA, "missing");

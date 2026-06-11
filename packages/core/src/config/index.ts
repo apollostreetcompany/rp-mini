@@ -7,6 +7,7 @@ export type SelectionScope = "session" | "workspace";
 export type EnhancementMode = "rewrite" | "augment" | "preserve";
 export type PathDisplay = "relative" | "full";
 export type IosIgnorePreset = "auto" | boolean;
+export type RoleProfile = "full" | "editor" | "explorer";
 
 export interface PresetConfig {
   include_files?: boolean;
@@ -19,6 +20,7 @@ export interface PresetConfig {
 
 export interface Config {
   roots: string[];
+  profile: RoleProfile;
   tokenizer: TokenizerConfig;
   budgets: {
     discovery: number;
@@ -88,6 +90,7 @@ export interface LoadConfigOptions {
 
 export const defaultConfig: Config = {
   roots: ["."],
+  profile: "full",
   tokenizer: "heuristic",
   budgets: { discovery: 160000, plan: 120000 },
   caps: {
@@ -186,13 +189,15 @@ export async function loadConfig(
   const userConfigPath = join(home, ".config", "rp-mini", "config.json");
   const workspaceConfigPath = join(rootDir, "rp-mini.config.json");
 
-  return deepMerge(
-    defaultConfig,
-    await readJsonConfig(userConfigPath),
-    await readJsonConfig(workspaceConfigPath),
-    envToConfig(env),
-    overrides,
-  ) as Config;
+  return validateConfig(
+    deepMerge(
+      defaultConfig,
+      await readJsonConfig(userConfigPath),
+      await readJsonConfig(workspaceConfigPath),
+      envToConfig(env),
+      overrides,
+    ) as Config,
+  );
 }
 
 async function readJsonConfig(path: string): Promise<DeepPartial<Config>> {
@@ -238,6 +243,7 @@ function envToConfig(env: Record<string, string | undefined>): DeepPartial<Confi
     env.RP_MINI_PACKAGER_DUPLICATE_INSTRUCTIONS_AT_TOP,
   );
   setBoolean(result, ["daemon", "keep_alive"], env.RP_MINI_DAEMON_KEEP_ALIVE);
+  setString(result, ["profile"], env.RP_MINI_PROFILE);
   setString(result, ["tokenizer"], env.RP_MINI_TOKENIZER);
   setString(result, ["codemaps", "cache_dir"], env.RP_MINI_CODEMAPS_CACHE_DIR);
   setString(result, ["selection", "scope"], env.RP_MINI_SELECTION_SCOPE);
@@ -250,6 +256,13 @@ function envToConfig(env: Record<string, string | undefined>): DeepPartial<Confi
   setStringArray(result, ["ignore", "extra"], env.RP_MINI_IGNORE_EXTRA);
   setStringArray(result, ["packager", "section_order"], env.RP_MINI_PACKAGER_SECTION_ORDER);
   return result;
+}
+
+function validateConfig(config: Config): Config {
+  if (!["full", "editor", "explorer"].includes(config.profile)) {
+    throw new Error(`Invalid profile config: ${String(config.profile)}`);
+  }
+  return config;
 }
 
 function setNumber(target: DeepPartial<Config>, path: string[], raw: string | undefined): void {
