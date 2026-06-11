@@ -1,0 +1,13 @@
+{
+  "name": "rp-mini",
+  "owner": {
+    "name": "apollostreetcompany"
+  },
+  "plugins": [
+    {
+      "name": "rp-mini",
+      "source": "./packages/cc-plugin",
+      "description": "Minimal context-engineering MCP server for coding agents: fast search, codemaps, curated selections, packaged exports, verified edits, and a context-builder subagent with rp-* skills."
+    }
+  ]
+}
