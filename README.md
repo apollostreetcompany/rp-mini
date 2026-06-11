@@ -94,9 +94,11 @@ Every MCP tool accepts optional `root`, an absolute workspace path that targets 
 | `manage_selection` | Add, set, remove, promote, demote, save, or load context selections. |
 | `workspace_context` | Snapshot or export packaged context with token accounting. |
 | `prompt` | Get, set, append, or clear handoff instructions. |
-| `apply_edits` | Apply fail-closed rewrite or search/replace edits. |
-| `file_actions` | Create, delete, or move files with guardrails. |
+| `apply_edits` | Preview or apply fail-closed rewrite/search/replace edits with `dry_run`, `expected_sha256`, and post-apply proof. |
+| `file_actions` | Create, delete, or move files with guardrails; delete/move can require `expected_sha256`. |
 | `git` | Read-only status, diff, log, show, and blame. |
+
+Use `apply_edits` with `dry_run: true` to get the full match result, `unified_diff`, and `pre_sha256` without writing. After approval, call the same edit with `expected_sha256: <pre_sha256>` so stale files fail closed before matching. Successful applies return `verified: true`, `post_sha256`, and line-numbered `post_context` slices from the final file.
 
 ## Benchmarks
 

@@ -49,9 +49,10 @@ If a shell is available and no MCP client is loaded, use \`node packages/server/
    - budget: default 120k for plan work unless caller supplied a hard budget
    - response_type: \`plan\`
    - enhancement mode: \`rewrite\` unless the user requested \`augment\` or \`preserve\`
-4. Act on the handoff: implement directly against the curated selection and plan. Use existing repo patterns and avoid unrelated refactors.
-5. Validate with relevant tests, lint/format, or build commands for the touched area.
-6. Report changes, validation results, assumptions, and remaining risks.
+4. Question loop: this is the rp-build/rp-investigate question loop. If the builder returns \`<questions>\` plus a saved profile name, read the cited files, check git history or searches, and answer only conclusive questions with \`<answer key="..." source="orchestrator" >...</answer>\`. Escalate only for blocking AND high-stakes questions: irreversible/destructive actions, product policy, money/auth/data-loss; present numbered options in chat and wait. Append \`<answers>\` with \`prompt op=append\`, resume with \`manage_selection op=load_profile\`, and remember advisory questions never interrupt.
+5. Act on the handoff: implement directly against the curated selection and plan. Use existing repo patterns and avoid unrelated refactors.
+6. Validate with relevant tests, lint/format, or build commands for the touched area.
+7. Report changes, validation results, assumptions, and remaining risks.
 
 Do not skip \`context-builder\` for non-trivial code work; the quick scan is orientation, not the deep exploration.
 `,
@@ -71,11 +72,12 @@ If a shell is available and no MCP client is loaded, use \`node packages/server/
    - budget: caller budget or default discovery budget
    - response_type: \`question\` for evidence exports, \`plan\` for planning exports, or \`review\` for diff exports
    - enhancement mode: \`preserve\` when the user wants selection-only export; otherwise \`rewrite\`
-3. Inspect the resulting selection and token count with \`workspace_context include=["selection","tokens"]\`.
-4. Export with \`workspace_context op=export\`, choosing the matching preset when provided (\`standard\`, \`plan\`, \`review\`, or \`diff-followup\`).
-5. Hand the payload path and receipt path to the user. Mention that the payload is compatible with proconsult-style external model intake.
-6. Cite the \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
-7. Report selected scope, token count, preset, assumptions, and any files deliberately excluded.
+3. If the builder returns \`<questions>\`, follow the question loop defined in rp-build/rp-investigate before continuing.
+4. Inspect the resulting selection and token count with \`workspace_context include=["selection","tokens"]\`.
+5. Export with \`workspace_context op=export\`, choosing the matching preset when provided (\`standard\`, \`plan\`, \`review\`, or \`diff-followup\`).
+6. Hand the payload path and receipt path to the user. Mention that the payload is compatible with proconsult-style external model intake.
+7. Cite the \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
+8. Report selected scope, token count, preset, assumptions, and any files deliberately excluded.
 
 Do not paste large exported payloads into chat; provide paths and receipt details.
 `,
@@ -98,10 +100,11 @@ Triage fast path: Bounded question (single subsystem, named symbol, roughly <=5 
    - budget: default discovery budget unless caller supplied a hard budget
    - response_type: \`question\`
    - enhancement mode: \`rewrite\` unless the user requested \`augment\` or \`preserve\`
-4. Pursue evidence from the handoff: read selected files, inspect git history or diffs when relevant, and verify claims with file:line references.
-5. Refine selection only when evidence shows the builder missed needed context; bias toward adding, not clearing, selection.
-6. Finish with a \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
-7. Report findings as evidence, inference, unknowns, and next recommended action.
+4. Question loop: this is the rp-build/rp-investigate question loop. If the builder returns \`<questions>\` plus a saved profile name, read the cited files, check git history or searches, and answer only conclusive questions with \`<answer key="..." source="orchestrator" >...</answer>\`. Escalate only for blocking AND high-stakes questions: irreversible/destructive actions, product policy, money/auth/data-loss; present numbered options in chat and wait. Append \`<answers>\` with \`prompt op=append\`, resume with \`manage_selection op=load_profile\`, and remember advisory questions never interrupt.
+5. Pursue evidence from the handoff: read selected files, inspect git history or diffs when relevant, and verify claims with file:line references.
+6. Refine selection only when evidence shows the builder missed needed context; bias toward adding, not clearing, selection.
+7. Finish with a \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile. If the caller asked for a durable artifact, write the export to a file with the host Write tool or shell CLI.
+8. Report findings as evidence, inference, unknowns, and next recommended action.
 
 Do not change source files in this workflow.
 `,
@@ -122,10 +125,11 @@ If a shell is available and no MCP client is loaded, use \`node packages/server/
    - budget: 120k default for plan unless caller supplied a hard budget
    - response_type: \`plan\`
    - enhancement mode: \`rewrite\` unless the user requested \`augment\` or \`preserve\`
-4. Act on the handoff: write the plan document in your own concise voice, grounded in selected files and file:line references.
-5. Include goal, constraints, architecture, work items, validation, risks, and open questions.
-6. Validate non-code quality: internal paths resolve, assumptions are labeled, and the plan matches current repo state.
-7. Report the plan path and the key tradeoffs.
+4. If the builder returns \`<questions>\`, follow the question loop defined in rp-build/rp-investigate before continuing.
+5. Act on the handoff: write the plan document in your own concise voice, grounded in selected files and file:line references.
+6. Include goal, constraints, architecture, work items, validation, risks, and open questions.
+7. Validate non-code quality: internal paths resolve, assumptions are labeled, and the plan matches current repo state.
+8. Report the plan path and the key tradeoffs.
 
 Do not implement code in this workflow.
 `,
@@ -147,9 +151,10 @@ If a shell is available and no MCP client is loaded, use \`node packages/server/
    - response_type: \`review\`
    - enhancement mode: \`rewrite\` unless the user requested \`augment\` or \`preserve\`
 4. If the review identifies concrete work, rerun \`context-builder\` with response_type: \`plan\` for the chosen refactor.
-5. Act on the handoff: implement scoped improvements only, one logical change at a time.
-6. Validate behavior with existing and targeted tests; broaden tests if shared contracts changed.
-7. Report what changed, what stayed intentionally unchanged, validations, and residual risk.
+5. If the builder returns \`<questions>\`, follow the question loop defined in rp-build/rp-investigate before continuing.
+6. Act on the handoff: implement scoped improvements only, one logical change at a time.
+7. Validate behavior with existing and targeted tests; broaden tests if shared contracts changed.
+8. Report what changed, what stayed intentionally unchanged, validations, and residual risk.
 
 Do not use refactor as a vehicle for unrelated cleanup.
 `,
@@ -170,10 +175,11 @@ If a shell is available and no MCP client is loaded, use \`node packages/server/
    - budget: default discovery budget unless caller supplied a hard budget
    - response_type: \`review\`
    - enhancement mode: \`rewrite\` unless the user requested \`augment\` or \`preserve\`
-4. Act on the handoff: review diff context and affected-but-unchanged sources together.
-5. Judge correctness, security, API/contracts, tests, maintainability, and consistency with existing patterns.
-6. Finish with a \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile.
-7. Report findings first, ordered by severity, with file:line references and concrete fixes. Keep summary secondary.
+4. If the builder returns \`<questions>\`, follow the question loop defined in rp-build/rp-investigate before continuing.
+5. Act on the handoff: review diff context and affected-but-unchanged sources together.
+6. Judge correctness, security, API/contracts, tests, maintainability, and consistency with existing patterns.
+7. Finish with a \`workspace_context op=export\` receipt: token totals, content hash, and saved handoff profile.
+8. Report findings first, ordered by severity, with file:line references and concrete fixes. Keep summary secondary.
 
 Do not provide review feedback before \`context-builder\` has built review-mode context unless the user explicitly requested a quick/manual review.
 `,

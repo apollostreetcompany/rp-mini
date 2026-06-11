@@ -206,7 +206,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "apply_edits",
     description:
-      "Apply rewrite, single search/replace, or edits[] using the later edit ladder; disabled by config when false. Optional root targets another workspace root.",
+      "Preview or apply rewrite, single search/replace, or edits[] using the edit ladder; dry_run returns a diff and pre_sha256, expected_sha256 gates real writes. Optional root targets another workspace root.",
     enabled: (config) => config.tools.apply_edits,
     inputSchema: z
       .object({
@@ -229,6 +229,11 @@ export const toolDefinitions: ToolDefinition[] = [
         all: z.boolean().default(false),
         on_missing: z.enum(["error", "create"]).default("error"),
         verbose: z.boolean().default(false),
+        dry_run: z.boolean().default(false),
+        expected_sha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
       })
       .strict()
       .refine(
@@ -249,7 +254,7 @@ export const toolDefinitions: ToolDefinition[] = [
   {
     name: "file_actions",
     description:
-      "Create, delete, or move files with if_exists guard; disabled by config when false. Optional root targets another workspace root.",
+      "Create, delete, or move files with if_exists guard; delete/move support expected_sha256 freshness. Optional root targets another workspace root.",
     enabled: (config) => config.tools.file_actions,
     inputSchema: z
       .object({
@@ -261,6 +266,10 @@ export const toolDefinitions: ToolDefinition[] = [
         new_path: z.string().min(1).optional(),
         destination: z.string().min(1).optional(),
         if_exists: z.enum(["error", "overwrite"]).default("error"),
+        expected_sha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
       })
       .strict()
       .refine((args) => args.action !== undefined || args.op !== undefined, {
@@ -553,6 +562,8 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
         rewrite?: string;
         on_missing?: "error" | "create";
         verbose?: boolean;
+        dry_run?: boolean;
+        expected_sha256?: string;
       };
       const result = await applyFileEdits({
         roots: config.roots,
@@ -565,8 +576,10 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
         rewrite: editArgs.rewrite,
         on_missing: editArgs.on_missing,
         verbose: editArgs.verbose,
+        dry_run: editArgs.dry_run,
+        expected_sha256: editArgs.expected_sha256,
       });
-      if (result.status === "ok" && context.stateRef.state) {
+      if (result.status === "applied" && context.stateRef.state) {
         const catalog = await getCatalog(config.roots, config);
         context.stateRef.state.updateCatalog(catalog);
         await context.stateRef.state.refreshFiles([result.path]);
@@ -582,6 +595,7 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
         new_path?: string;
         destination?: string;
         if_exists?: "error" | "overwrite";
+        expected_sha256?: string;
       };
       const action = actionArgs.action ?? actionArgs.op ?? "create";
       const beforeSnapshot = context.stateRef.state?.snapshot();
@@ -596,8 +610,9 @@ async function handleTool(name: string, args: unknown, context: HandlerContext):
         content: actionArgs.content,
         new_path: actionArgs.new_path ?? actionArgs.destination,
         if_exists: actionArgs.if_exists,
+        expected_sha256: actionArgs.expected_sha256,
       });
-      if (result.status === "ok" && context.stateRef.state) {
+      if (result.status === "applied" && context.stateRef.state) {
         const catalog = await getCatalog(config.roots, config);
         context.stateRef.state.updateCatalog(catalog);
         if (action === "delete") {

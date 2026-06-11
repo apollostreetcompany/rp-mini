@@ -103,6 +103,11 @@ describe("Claude Code plugin package", () => {
     const agent = readText(agentPath);
     const requiredPhrases = [
       '<taskname="',
+      "<questions>",
+      '<question key="migration-backfill" severity="blocking" default="separate-job">',
+      '<option value="inline">Backfill in the same migration</option>',
+      "<answers>",
+      '<answer key="migration-backfill" source="orchestrator|user">separate-job</answer>',
       "Workspace Binding",
       'root="<absolute path>"',
       "get_file_tree mode=folders max_depth=1",
@@ -128,6 +133,7 @@ describe("Claude Code plugin package", () => {
       "<selected_context>",
       "<relationships>",
       "<ambiguities>",
+      "<questions>",
     ];
 
     for (const phrase of requiredPhrases) {
@@ -149,6 +155,30 @@ describe("Claude Code plugin package", () => {
     expect(contract).toContain("final token total");
   });
 
+  it("documents the question-loop contract and resume semantics", () => {
+    const contract = readText(contractPath);
+
+    for (const phrase of [
+      "## Question Loop",
+      "<questions>",
+      "<answers>",
+      'severity="blocking"',
+      'severity="advisory"',
+      "keys are stable kebab-case",
+      "Every question carries a `default`",
+      "evidence pointers",
+      "complete the best selection you can and save the handoff profile before halting",
+      "questions never excuse an empty selection",
+      "Advisory questions never block",
+      "If `<answers>` are present, treat them as binding decisions",
+      "do not re-ask answered keys",
+      "Unanswered advisory keys",
+      "proceed with defaults",
+    ]) {
+      expect(contract).toContain(phrase);
+    }
+  });
+
   it("defines thin skills that delegate to the context-builder subagent", () => {
     for (const skill of rpSkills) {
       const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
@@ -159,6 +189,36 @@ describe("Claude Code plugin package", () => {
       expect(text).toContain("context-builder");
       expect(text).toContain("response_type");
       expect(text.split("\n").length).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("documents the orchestrator question loop in rp-build and rp-investigate", () => {
+    for (const skill of ["rp-build", "rp-investigate"]) {
+      const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
+      for (const phrase of [
+        "Question loop",
+        "saved profile name",
+        "read the cited files",
+        "git history",
+        'source="orchestrator"',
+        "blocking AND high-stakes",
+        "irreversible/destructive actions, product policy, money/auth/data-loss",
+        "AskUserQuestion",
+        "prompt op=append",
+        "<answers>",
+        "manage_selection op=load_profile",
+        "advisory questions never interrupt",
+      ]) {
+        expect(text).toContain(phrase);
+      }
+    }
+  });
+
+  it("references the question loop from every rp-* skill", () => {
+    for (const skill of rpSkills) {
+      const text = readText(join(pluginRoot, `skills/${skill}/SKILL.md`));
+      expect(text).toContain("question loop");
+      expect(text).toContain("rp-build/rp-investigate");
     }
   });
 
