@@ -8,6 +8,8 @@ import {
   loadConfig,
   searchFiles,
   SelectionState,
+  estimateTokens,
+  generateFileTree,
   warmCodemapCache,
   getCodeStructures,
 } from "../packages/core/dist/index.js";
@@ -84,6 +86,30 @@ async function main() {
   );
 
   const selectedFiles = firstTextFiles(catalog, 20);
+  const treeAnchorFiles = spreadTextFiles(catalog, 10);
+  const treeBudgets = [2000, 5000, 10000];
+  const treeRows = [];
+  for (const budget of treeBudgets) {
+    const treeConfig = { ...config, caps: { ...config.caps, tree_tokens: budget } };
+    const measurement = await medianMeasure(() =>
+      generateFileTree(catalog, treeConfig, {
+        mode: "auto",
+        maxTokens: budget,
+        selectedPaths: treeAnchorFiles,
+      }),
+    );
+    const tree = "tree" in measurement.value ? measurement.value.tree : "";
+    const tokens = estimateTokens(tree);
+    const anchorRetention = anchorRetentionStats(tree, treeAnchorFiles);
+    const topCoverage = topLevelCoverageStats(tree, catalog);
+    treeRows.push([
+      `${budget}`,
+      formatMs(measurement.ms),
+      `${tokens}/${budget}`,
+      `${anchorRetention.visible}/${anchorRetention.total} (${formatPercent(anchorRetention.visible / anchorRetention.total)})`,
+      `${topCoverage.visible}/${topCoverage.total} (${formatPercent(topCoverage.visible / topCoverage.total)})`,
+    ]);
+  }
   const workspaceExport = await medianMeasure(async () => {
     const state = new SelectionState({
       root: benchRoot,
@@ -163,6 +189,8 @@ async function main() {
     argMaxNote,
     structureDir,
     selectedFiles,
+    treeAnchorFiles,
+    treeRows,
   });
   await mkdir(dirname(docsPath), { recursive: true });
   await writeFile(docsPath, markdown, "utf8");
@@ -252,6 +280,65 @@ function firstTextFiles(catalog, count) {
     .map((file) => file.relativePath);
 }
 
+function spreadTextFiles(catalog, count) {
+  const files = catalog.roots
+    .flatMap((entry) => entry.files)
+    .filter((file) => !file.isBinary && !file.oversized && !file.likelyGenerated)
+    .sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  if (files.length <= count) return files.map((file) => file.relativePath);
+  const selected = [];
+  const seen = new Set();
+  for (let index = 0; index < count; index += 1) {
+    const file = files[Math.floor((index * (files.length - 1)) / Math.max(1, count - 1))];
+    if (file && !seen.has(file.relativePath)) {
+      selected.push(file.relativePath);
+      seen.add(file.relativePath);
+    }
+  }
+  for (const file of files) {
+    if (selected.length >= count) break;
+    if (!seen.has(file.relativePath)) selected.push(file.relativePath);
+  }
+  return selected;
+}
+
+function anchorRetentionStats(tree, selectedFiles) {
+  const wanted = new Set();
+  for (const file of selectedFiles) {
+    const parts = file.split("/").filter(Boolean);
+    for (let index = 0; index < parts.length; index += 1) {
+      wanted.add(parts[index]);
+    }
+  }
+  let visible = 0;
+  for (const part of wanted) {
+    if (tree.includes(part)) visible += 1;
+  }
+  return { visible, total: wanted.size };
+}
+
+function topLevelCoverageStats(tree, catalog) {
+  const topLevel = new Set();
+  for (const rootCatalog of catalog.roots) {
+    for (const dir of rootCatalog.dirs) {
+      const [top] = dir.relativePath.split("/");
+      if (top) topLevel.add(top);
+    }
+  }
+  let visible = 0;
+  for (const dir of topLevel) {
+    if (
+      tree.includes(`├── ${dir}`) ||
+      tree.includes(`└── ${dir}`) ||
+      tree.includes(`├── ${dir}/`) ||
+      tree.includes(`└── ${dir}/`)
+    ) {
+      visible += 1;
+    }
+  }
+  return { visible, total: topLevel.size };
+}
+
 async function observeArgMax(catalog, config) {
   const files = catalog.roots.reduce((total, rootCatalog) => total + rootCatalog.files.length, 0);
   try {
@@ -275,6 +362,8 @@ function renderMarkdown({
   argMaxNote,
   structureDir,
   selectedFiles,
+  treeAnchorFiles,
+  treeRows,
 }) {
   return `# rp-mini Benchmarks
 
@@ -297,6 +386,12 @@ The benchmark reads \`../repoprompt-ce\` but does not write to it. Cache and exp
 
 ${markdownTable(rows)}
 
+## Tree Quality
+
+Selected anchors for tree quality: ${treeAnchorFiles.map((file) => `\`${file}\``).join(", ")}.
+
+${treeMarkdownTable(treeRows)}
+
 ## Notes
 
 - ${argMaxNote}
@@ -314,8 +409,20 @@ function markdownTable(rows) {
   ].join("\n");
 }
 
+function treeMarkdownTable(rows) {
+  return [
+    "| Budget | Median render | Tokens used | Anchor retention | Top-level coverage |",
+    "| ---: | ---: | ---: | ---: | ---: |",
+    ...rows.map((row) => `| ${row[0]} | ${row[1]} | ${row[2]} | ${row[3]} | ${row[4]} |`),
+  ].join("\n");
+}
+
 function formatMs(ms) {
   return `${ms.toFixed(1)} ms`;
+}
+
+function formatPercent(value) {
+  return `${(value * 100).toFixed(1)}%`;
 }
 
 function filesPerSecond(files, ms) {

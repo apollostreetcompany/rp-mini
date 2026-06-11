@@ -216,6 +216,7 @@ async function buildFileMap(
     const codemapPaths = codemapEntries(snapshot, preset.codemap_usage).map((entry) => entry.path);
     const tree = generateFileTree(opts.catalog, config, {
       mode: preset.tree_mode,
+      maxTokens: config.caps.tree_tokens,
       selectedPaths,
       codemapPaths,
     });

@@ -51,7 +51,7 @@ Config layers are defaults, `~/.config/rp-mini/config.json`, workspace `rp-mini.
 | `budgets.plan` | `120000` | Planning preset budget. |
 | `caps.search_chars` | `50000` | Response character budget for search shaping. |
 | `caps.structure_tokens` | `6000` | Codemap response token cap. |
-| `caps.tree_tokens` | `10000` | File tree response token cap. |
+| `caps.tree_tokens` | `10000` | Default adaptive file tree token cap; auto mode degrades from full tree toward summarized/selected views while preserving anchors. |
 | `caps.git_patch_lines` | `300` | Git patch lines included in review exports. |
 | `caps.file_size_bytes` | `10000000` | Oversized-file threshold for catalog/search safety. |
 | `codemaps.languages` | `ts, tsx, js, py, swift, go, rust, java, c, cpp, c_sharp, ruby, php, dart` | Languages eligible for codemap extraction. |
@@ -89,7 +89,7 @@ Every MCP tool accepts optional `root`, an absolute workspace path that targets 
 | --- | --- |
 | `file_search` | Search by path, content, or both through catalog-approved files. |
 | `read_file` | Read full files, line ranges, or negative tail ranges. |
-| `get_file_tree` | Render capped trees in auto, full, folders, or selected mode. |
+| `get_file_tree` | Render capped trees in auto, full, folders, or selected mode; accepts optional `max_tokens` up to 50000 for per-call tree budgets. |
 | `get_code_structure` | Return codemap signatures for files, directories, or selected scope. |
 | `manage_selection` | Add, set, remove, promote, demote, save, or load context selections. |
 | `workspace_context` | Snapshot or export packaged context with token accounting. |
