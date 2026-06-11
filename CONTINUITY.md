@@ -32,6 +32,9 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 19. (2026-06-10) Bead 13 entry: benchmark three CE-repo investigation routes on `codex/docs/bead-13-investigation-benchmark`: installed rp-mini `/rp-investigate`, normal RepoPrompt `rp-investigate`, and non-RepoPrompt shell/Codex investigation. Risk class: Low research/docs; rigor: delegated subagent receipts, wall-clock timing, output-quality comparison, and local documentation artifact.
 20. (2026-06-10) Bead 14 entry: resolve benchmark tool friction by adding shell CLI wrappers over the shared MCP tool dispatcher, adding CLI help, making the Codex installer executable, and clearing the generated CE `.rp-mini/` cache through a recoverable move. Risk class: Medium because CLI/user setup behavior changes; rigor: targeted CLI tests, plugin installer mode test, full build/format/test, PR merge to main.
 21. (2026-06-10) Beads 15-17 entry (parallel worktrees off main, supervised codex implementers, no commit/push by engineers): bead 15 per-call `root` param on all 10 MCP tools with bounded-LRU dynamic root contexts (High risk: public tool schema change → primary review mandatory); bead 16 contract/skills — pre-halt selection-profile save, workspace-binding check + `root` fallback guidance, rp-investigate triage fast path, export receipts (Medium); bead 17 stream rg `--json` stdout with early kill to remove `execFile` maxBuffer crash (Medium). Driven by `docs/analysis/investigation-benchmark-2026-06-10.md` + external 3-agent benchmark findings.
+22. (2026-06-11) Hardened-code porting rule (user directive): treat RP-CE as battle-tested — when CE has a mechanism, port its algorithm after read-only study with attribution; any deviation must be argued explicitly in the bead report, never silently simplified.
+23. (2026-06-11) Product principle (user directive): rp-mini minifies SURFACE AREA (UI/app), never strength or performance; where headless operation allows, target measurably better than CE, with numbers in bead evidence.
+24. (2026-06-11) Beads 18-22 entry from rp-mini-vs-CE weakness analysis, two waves to avoid file-ownership conflicts (packager/ and server schemas). Wave 1: bead 18 edit verification loop (dry_run preview + expected_sha256 fail-closed apply + post-apply verify with final-text proof; High — schema + edit engine); bead 19 industrial tree degrade ladder ported from CE CodeMapExtractor+Snapshots, budget-aware, selection-deep, in get_file_tree + export file_map, benched at 2k/5k/10k (High — must beat CE, golden+bench evidence); bead 20 question-loop contract (typed <questions> severity blocking|advisory, orchestrator answers from evidence, human interrupted only for blocking+irreversible; Medium — prompt layer). Wave 2 after wave-1 merge: bead 21 batched read_file paths[] + resolve-all-then-hydrate-concurrently packager pipeline per CE PromptContextPreAssemblyService; bead 22 role profiles explicit and loud (serve --profile, clamps dynamic roots, profile visible in instructions + workspace_context, tool_disabled_by_profile errors — no silent absence).
 
 ## State
 
@@ -55,12 +58,21 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - [x] Bead 16 MERGED to main (PR #17, squash 4145950): contract Workspace Binding section + mandatory pre-halt `manage_selection op=save_profile name="handoff-<slug>"` handoff (verified op names); binding/root/CLI-fallback note in all rp-* skills both plugins; rp-investigate triage fast path (bounded → direct tools, broad → builder); export-receipt mandates in investigate/review/export. Supervisor fixed `build-prompts.mjs` to emit the committed `{{RP_MINI_SERVER_CLI}}` placeholder (root cause of recurring dirty toml since bead 11), restored the strict placeholder test the engineer had weakened, added CI `build:prompts` drift guard. 128 tests.
 - [x] Bead 17 MERGED to main (PR #16, squash c3e817f): `contentSearch` streams rg `--json` via spawn + incremental parsing — no maxBuffer; early stop at `max_results` or byte valve `max(search_chars*8, 16MB)` incl. supervisor-added no-newline guard; SIGTERM + awaited reaping (pid-liveness test). Regression corpus failed pre-fix with maxBuffer error, passes in 124ms. 125 tests. Resolves the bead-12 search anomaly.
 
+### Done (beads 18-23, both waves)
+- [x] Bead 18 MERGED (PR #19, cba3bc4): edit verification loop — dry_run preview, expected_sha256 fail-closed apply, post-write proof (verified/post_sha256/post_context). 143 tests at merge.
+- [x] Bead 19 MERGED (PR #20, 17f532c): CE tree degrade ladder port — 100% anchor retention + top-level coverage at 2k/5k/10k on CE corpus; export file_map on same engine.
+- [x] Bead 20 MERGED (PR #18, 508a236): question-loop contract — typed <questions>/<answers>, orchestrator triage, human only for blocking+high-stakes.
+- [x] Bead 21 MERGED (PR #21, 312c2c3): read_file paths[1..32] + resolve-then-hydrate concurrent packager (4.99x probe), payload byte-identical.
+- [x] Bead 22 MERGED (PR #23, 803b432): role profiles full|editor|explorer — register-but-refuse typed errors, profile visible in instructions + workspace_context.server, clamp across dynamic roots (supervisor fixed engineer's wholesale block).
+- [x] Bead 23 MERGED (PR #22, 6300860): tree budget-fill — 5k utilization 58.8%->99.0%, 10k 29.4%->50.5%, anchors still 100%, renders faster (11-12ms).
+- Final combined main: 179/179 tests, build:prompts drift guard clean.
+
 ### Now
-- Beads 15-17 MERGED; main `4145950` green. Ready for global Codex rp-mini install + CE investigation benchmark rerun (the bead-15 `root` param removes the workspace-binding failure that decided the last benchmark).
+- Beads 18-23 complete and merged; main deployable. Ready for the benchmark rerun.
 
 ### Next
-- Install rp-mini into global Codex (`packages/codex-plugin/install.sh --write-config`), open a fresh Codex process, rerun the 3-route CE investigation benchmark against a cold CE checkout cache; rp-mini route should now bind the target via `root` or CLI.
-- Remaining deferred: rg arg-list E2BIG risk on very large corpora (file paths passed as rg args); slice anchor-rebase; keep-alive daemon; iOS Tier 2; native tree-sitter speedup for cold codemap warm; name/trademark check.
+- Global Codex install (`packages/codex-plugin/install.sh --write-config`), fresh Codex process, rerun the 3-route CE investigation benchmark against a cold CE checkout cache — rp-mini route now has root targeting, profiles, question loop, verified edits, batched reads, and a budget-filling tree.
+- Remaining deferred: rg arg-list E2BIG risk on very large corpora; slice anchor-rebase; keep-alive daemon; iOS Tier 2; native tree-sitter speedup for cold codemap warm; name/trademark check.
 
 ## Open Questions
 - UNCONFIRMED: final published name ("rp-mini" working title; RepoPrompt trademark courtesy check before any public release)
