@@ -68,7 +68,7 @@ Build rp-mini per docs/plans/rp-mini-design-2026-06-10.md: a TypeScript MCP cont
 - Final combined main: 179/179 tests, build:prompts drift guard clean.
 
 ### Now
-- Beads 18-23 complete and merged; main deployable. Ready for the benchmark rerun.
+- Beads 18-23 complete and merged; main deployable at 18ae263. INSTALLED: Codex (skills `~/.codex/skills/rp-mini-*` + `[mcp_servers.rp-mini]` in `~/.codex/config.toml` via install.sh --write-config) and Claude Code (`rp-mini@rp-mini` marketplace plugin, user scope, enabled — new sessions pick it up). Three-arm proof DONE (rp-bench reports/bench-vs-ce-2026-06-11.md): quality CE 15/18 = rp-mini 15/18 >> plain codex 9/18 (cheat-policy primary table); speed rp-mini mean 66,582ms vs CE 117,240ms (-43%), tool calls 7.94 vs 10.44, 0 stalls/cheats (CE had 1 cross-server cheat); CE keeps best mean score 0.867 vs 0.839. Caveat: measures edit pipeline with files given, not discovery/UI.
 
 ### Next
 - Global Codex install (`packages/codex-plugin/install.sh --write-config`), fresh Codex process, rerun the 3-route CE investigation benchmark against a cold CE checkout cache — rp-mini route now has root targeting, profiles, question loop, verified edits, batched reads, and a budget-filling tree.
